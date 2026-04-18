@@ -29,6 +29,10 @@ class User(TimestampMixin, Base):
 
     channel_accounts: Mapped[list["ChannelAccount"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     oauth_accounts: Mapped[list["OAuthAccount"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    oauth_connect_tokens: Mapped[list["OAuthConnectToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     messages: Mapped[list["Message"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     reminders: Mapped[list["Reminder"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -63,6 +67,18 @@ class OAuthAccount(TimestampMixin, Base):
     token_type: Mapped[Optional[str]] = mapped_column(String(64))
 
     user: Mapped[User] = relationship(back_populates="oauth_accounts")
+
+
+class OAuthConnectToken(TimestampMixin, Base):
+    __tablename__ = "oauth_connect_tokens"
+
+    token: Mapped[str] = mapped_column(String(512), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="oauth_connect_tokens")
 
 
 class OAuthState(Base):

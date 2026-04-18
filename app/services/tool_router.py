@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from app.contracts import InboundEvent, InternalUser
 from app.services.google_calendar import GoogleOAuthService, OAuthConnectionRequired
 from app.services.reminders import ReminderService
 
 
-AuthUrlBuilder = Callable[[str, str], str]
-
-
 @dataclass
 class ToolRouter:
     reminder_service: ReminderService
     google_service: GoogleOAuthService
-    auth_url_builder: AuthUrlBuilder
 
     def tool_definitions(self) -> list[dict[str, Any]]:
         return [
@@ -221,7 +217,11 @@ class ToolRouter:
             return {
                 "status": "oauth_required",
                 "message": str(exc),
-                "connect_url": self.auth_url_builder(user.id, user.platform),
+                "connect_url": self.google_service.issue_connect_url(
+                    self.reminder_service.session,
+                    user_id=user.id,
+                    platform=user.platform,
+                ),
             }
 
         return {"status": "error", "message": f"Unknown tool: {name}"}

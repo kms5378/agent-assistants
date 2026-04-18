@@ -10,14 +10,18 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import TokenCipher
+from app.core.security import SignedTokenError, SignedTokenManager, TokenCipher
 from app.core.settings import Settings
-from app.core.time import parse_local_datetime, utcnow
-from app.models import OAuthAccount
+from app.core.time import ensure_aware, parse_local_datetime, utcnow
+from app.models import OAuthAccount, OAuthConnectToken
 
 
 class OAuthConnectionRequired(RuntimeError):
     """Raised when a user has not connected Google OAuth."""
+
+
+class InvalidConnectToken(RuntimeError):
+    """Raised when a connect token is invalid, expired, or already consumed."""
 
 
 @dataclass
@@ -39,6 +43,10 @@ class GoogleOAuthService:
     def __init__(self, settings: Settings, cipher: TokenCipher) -> None:
         self.settings = settings
         self.cipher = cipher
+        self.connect_token_signer = SignedTokenManager(
+            settings.encryption_key,
+            namespace="google-connect-token",
+        )
 
     def build_authorization_url(self, *, state: str) -> str:
         params = {
@@ -108,8 +116,63 @@ class GoogleOAuthService:
         session.flush()
         return account
 
-    def get_connect_url(self, user_id: str, platform: str = "telegram") -> str:
-        return f"{self.settings.app_base_url}/auth/google/start?user_id={user_id}&platform={platform}"
+    def issue_connect_url(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        platform: str = "telegram",
+        expires_in: timedelta = timedelta(minutes=10),
+    ) -> str:
+        expires_at = (utcnow() + expires_in).astimezone(dt_timezone.utc).replace(microsecond=0)
+        payload = {
+            "v": 1,
+            "jti": secrets.token_urlsafe(18),
+            "user_id": user_id,
+            "platform": platform,
+            "exp": expires_at.isoformat(),
+        }
+        signed_token = self.connect_token_signer.dumps(payload)
+        session.add(
+            OAuthConnectToken(
+                token=signed_token,
+                user_id=user_id,
+                platform=platform,
+                expires_at=expires_at,
+            )
+        )
+        session.flush()
+        return f"{self.settings.app_base_url}/auth/google/start?{urlencode({'connect_token': signed_token})}"
+
+    def consume_connect_token(self, session: Session, connect_token: str) -> OAuthConnectToken:
+        try:
+            payload = self.connect_token_signer.loads(connect_token)
+        except SignedTokenError as exc:
+            raise InvalidConnectToken("Connect token is invalid.") from exc
+
+        statement = select(OAuthConnectToken).where(OAuthConnectToken.token == connect_token)
+        dialect = session.bind.dialect.name if session.bind is not None else ""
+        if dialect == "postgresql":
+            statement = statement.with_for_update()
+        record = session.scalar(statement)
+        if record is None:
+            raise InvalidConnectToken("Connect token is invalid.")
+
+        record_expires_at = ensure_aware(record.expires_at).astimezone(dt_timezone.utc).replace(microsecond=0)
+        if payload.get("user_id") != record.user_id:
+            raise InvalidConnectToken("Connect token is invalid.")
+        if payload.get("platform") != record.platform:
+            raise InvalidConnectToken("Connect token is invalid.")
+        if payload.get("exp") != record_expires_at.isoformat():
+            raise InvalidConnectToken("Connect token is invalid.")
+        if record.used_at is not None:
+            raise InvalidConnectToken("Connect token is already used.")
+        if record_expires_at < utcnow():
+            raise InvalidConnectToken("Connect token is expired.")
+
+        record.used_at = utcnow()
+        session.flush()
+        return record
 
     def _ensure_valid_access_token(self, session: Session, user_id: str) -> str:
         account = session.scalar(

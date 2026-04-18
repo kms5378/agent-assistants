@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
@@ -13,11 +14,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.channels.telegram import TelegramAdapter
 from app.core.security import TokenCipher
 from app.core.settings import Settings, get_settings
-from app.core.time import utcnow
+from app.core.time import ensure_aware, utcnow
 from app.db import build_session_factory, init_db
-from app.models import OAuthState, User
+from app.models import OAuthState
 from app.services.conversation import ConversationService
-from app.services.google_calendar import GoogleOAuthService
+from app.services.google_calendar import GoogleOAuthService, InvalidConnectToken
 from app.services.openai_responses import OpenAIResponsesClient
 from app.services.reminders import ReminderService
 from app.services.tool_router import ToolRouter
@@ -55,7 +56,6 @@ class AppContainer:
         tool_router = ToolRouter(
             reminder_service=reminder_service,
             google_service=self.google_service,
-            auth_url_builder=self.google_service.get_connect_url,
         )
         return ConversationService(
             session=session,
@@ -107,25 +107,28 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
 
     @app.get("/auth/google/start")
     def google_auth_start(
-        user_id: str = Query(...),
-        platform: str = Query(default="telegram"),
+        connect_token: str = Query(...),
     ) -> RedirectResponse:
         session = resolved_container.session_factory()
         try:
-            user = session.get(User, user_id)
-            if user is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+            try:
+                connect_record = resolved_container.google_service.consume_connect_token(session, connect_token)
+            except InvalidConnectToken as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Connect token is invalid, expired, or already used.",
+                ) from exc
             state = resolved_container.google_service.create_state_token()
             session.add(
                 OAuthState(
                     state=state,
-                    user_id=user.id,
-                    platform=platform,
+                    user_id=connect_record.user_id,
+                    platform=connect_record.platform,
                     expires_at=utcnow() + timedelta(minutes=10),
                 )
             )
-            session.commit()
             auth_url = resolved_container.google_service.build_authorization_url(state=state)
+            session.commit()
             return RedirectResponse(auth_url)
         finally:
             session.close()
@@ -135,9 +138,12 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         session = resolved_container.session_factory()
         try:
             record = session.scalar(select(OAuthState).where(OAuthState.state == state))
-            if record is None or record.expires_at < utcnow():
+            if record is None or ensure_aware(record.expires_at) < utcnow():
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth state is invalid or expired.")
-            bundle = resolved_container.google_service.exchange_code(code)
+            try:
+                bundle = resolved_container.google_service.exchange_code(code)
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google token exchange failed.") from exc
             resolved_container.google_service.save_tokens(session, user_id=record.user_id, bundle=bundle)
             session.delete(record)
             session.commit()
