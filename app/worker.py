@@ -6,12 +6,14 @@ from typing import Optional
 from app.api.main import AppContainer
 from app.contracts import OutboundMessage
 from app.core.time import utcnow
+from app.db import init_db
 from app.models import Reminder
 from app.services.reminders import ReminderService
 
 
 def run_worker_loop(container: Optional[AppContainer] = None) -> None:
     resolved = container or AppContainer.build()
+    init_db(resolved.session_factory)
     while True:
         run_worker_once(resolved)
         time.sleep(resolved.settings.worker_poll_seconds)

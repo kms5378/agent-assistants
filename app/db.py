@@ -6,7 +6,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.settings import Settings
-from app.models import Base
+from app.models import Base, SchemaMigration
+
+
+SCHEMA_BASELINE_VERSION = "0001_initial"
+SCHEMA_BASELINE_DESCRIPTION = "create core assistant tables"
 
 
 def build_engine(settings: Settings):
@@ -18,6 +22,7 @@ def build_engine(settings: Settings):
         echo=settings.log_sql,
         future=True,
         connect_args=connect_args,
+        pool_pre_ping=not settings.is_sqlite,
     )
 
 
@@ -28,6 +33,19 @@ def build_session_factory(settings: Settings) -> sessionmaker[Session]:
 
 def init_db(session_factory: sessionmaker[Session]) -> None:
     Base.metadata.create_all(bind=session_factory.kw["bind"])
+    session = session_factory()
+    try:
+        baseline = session.get(SchemaMigration, SCHEMA_BASELINE_VERSION)
+        if baseline is None:
+            session.add(
+                SchemaMigration(
+                    version=SCHEMA_BASELINE_VERSION,
+                    description=SCHEMA_BASELINE_DESCRIPTION,
+                )
+            )
+            session.commit()
+    finally:
+        session.close()
 
 
 def session_scope(session_factory: sessionmaker[Session]) -> Iterator[Session]:

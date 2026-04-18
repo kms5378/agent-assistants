@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Optional
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -10,12 +11,18 @@ from app.channels.telegram import TelegramAdapter
 from app.contracts import InboundEvent, ModelToolCall, ModelTurnResponse
 from app.core.settings import Settings
 from app.core.time import ensure_aware, utcnow
-from app.db import build_session_factory, init_db
-from app.models import Reminder
+from app.db import (
+    SCHEMA_BASELINE_DESCRIPTION,
+    SCHEMA_BASELINE_VERSION,
+    build_engine,
+    build_session_factory,
+    init_db,
+)
+from app.models import Reminder, SchemaMigration
 from app.services.conversation import ConversationService
 from app.services.google_calendar import OAuthConnectionRequired
 from app.services.reminders import ReminderService
-from app.worker import run_worker_once
+from app.worker import run_worker_loop, run_worker_once
 
 
 class FakeModel:
@@ -132,6 +139,54 @@ def test_reminder_create_and_delete_ambiguity(tmp_path):
     ambiguous = service.delete_reminder(user_id="user-1", query="약")
     assert ambiguous["status"] == "ambiguity"
     assert len(ambiguous["candidates"]) == 2
+
+
+def test_init_db_records_schema_baseline_once(tmp_path):
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 'baseline.db'}")
+    session_factory = build_session_factory(settings)
+
+    init_db(session_factory)
+    init_db(session_factory)
+
+    session = session_factory()
+    try:
+        baseline = session.get(SchemaMigration, SCHEMA_BASELINE_VERSION)
+        count = session.query(SchemaMigration).count()
+    finally:
+        session.close()
+
+    assert baseline is not None
+    assert baseline.description == SCHEMA_BASELINE_DESCRIPTION
+    assert count == 1
+
+
+def test_build_engine_enables_pool_pre_ping_for_postgres():
+    settings = Settings(database_url="postgresql+psycopg://assistant:assistant@postgres:5432/assistant")
+
+    with patch("app.db.create_engine") as create_engine:
+        build_engine(settings)
+
+    create_engine.assert_called_once()
+    args, kwargs = create_engine.call_args
+    assert args[0] == settings.database_url
+    assert kwargs["connect_args"] == {}
+    assert kwargs["pool_pre_ping"] is True
+
+
+def test_run_worker_loop_initializes_db_before_polling(tmp_path):
+    container = make_container(tmp_path)
+
+    with patch("app.worker.init_db") as init_db_mock, patch("app.worker.run_worker_once") as run_once_mock, patch(
+        "app.worker.time.sleep",
+        side_effect=RuntimeError("stop-loop"),
+    ):
+        try:
+            run_worker_loop(container)
+        except RuntimeError as exc:
+            assert str(exc) == "stop-loop"
+
+    init_db_mock.assert_called_once_with(container.session_factory)
+    run_once_mock.assert_called_once_with(container)
 
 
 def test_conversation_service_creates_reminder_via_tool_call(tmp_path):

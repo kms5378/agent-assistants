@@ -15,6 +15,7 @@ FastAPI 기반의 대화형 Telegram assistant 입니다. 현재 구현 범위�
 - `api-spec.md`: 외부/내부 API 명세
 - `workflow.md`: 런타임 및 구현 순서도
 - `hand-off.md`: 인수인계 및 후속 작업 기준
+- `checklist.md`: phase별 실행 체크리스트
 
 ## Local Run
 

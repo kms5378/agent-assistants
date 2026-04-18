@@ -8,6 +8,11 @@ services:
       POSTGRES_DB: assistant
       POSTGRES_USER: assistant
       POSTGRES_PASSWORD: assistant
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistant -d assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -17,7 +22,8 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   worker:
     build: .
@@ -26,7 +32,8 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   nginx:
     image: nginx:1.27-alpine
