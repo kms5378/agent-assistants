@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
 from typing import Optional
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.api.main import AppContainer, create_app
 from app.channels.telegram import TelegramAdapter
 from app.contracts import InboundEvent, ModelToolCall, ModelTurnResponse
+from app.core.security import TokenCipher
 from app.core.settings import Settings
 from app.core.time import ensure_aware, utcnow
 from app.db import build_session_factory, init_db
-from app.models import Reminder
+from app.models import OAuthAccount, OAuthConnectToken, OAuthState, Reminder, User
 from app.services.conversation import ConversationService
-from app.services.google_calendar import OAuthConnectionRequired
+from app.services.google_calendar import GoogleOAuthService, GoogleTokenBundle
 from app.services.reminders import ReminderService
 from app.worker import run_worker_once
 
@@ -45,41 +48,15 @@ class RecordingTelegramAdapter(TelegramAdapter):
         self.sent.append(message)
 
 
-class DummyGoogleService:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-    def get_connect_url(self, user_id: str, platform: str = "telegram") -> str:
-        return f"{self.settings.app_base_url}/auth/google/start?user_id={user_id}&platform={platform}"
-
-    def create_state_token(self) -> str:
-        return "state"
-
-    def build_authorization_url(self, *, state: str) -> str:
-        return f"https://accounts.example.com/oauth?state={state}"
-
-    def exchange_code(self, code: str):  # pragma: no cover - not used in tests
-        raise NotImplementedError
-
-    def save_tokens(self, session, *, user_id: str, bundle):  # pragma: no cover - not used in tests
-        raise NotImplementedError
-
-    def list_events(self, *args, **kwargs):
-        raise OAuthConnectionRequired("Google account is not connected.")
-
-    def create_event(self, *args, **kwargs):
-        raise OAuthConnectionRequired("Google account is not connected.")
-
-    def update_event(self, *args, **kwargs):
-        raise OAuthConnectionRequired("Google account is not connected.")
-
-
 def make_container(tmp_path, model_client=None):
     settings = Settings(
         app_base_url="https://assistant.example.com",
         database_url=f"sqlite:///{tmp_path / 'assistant.db'}",
         telegram_webhook_secret="secret",
         telegram_webhook_key="hook-key",
+        google_client_id="test-google-client",
+        google_client_secret="test-google-secret",
+        google_redirect_uri="https://assistant.example.com/auth/google/callback",
         default_timezone="Asia/Seoul",
         encryption_key="test-key",
     )
@@ -90,8 +67,23 @@ def make_container(tmp_path, model_client=None):
         session_factory=session_factory,
         model_client=model_client or FakeModel(ModelTurnResponse(response_id="r1", text="안녕하세요")),
         telegram_adapter=RecordingTelegramAdapter(),
-        google_service=DummyGoogleService(settings),
+        google_service=GoogleOAuthService(settings, TokenCipher(settings.encryption_key)),
     )
+
+
+def create_user(container: AppContainer) -> str:
+    session = container.session_factory()
+    try:
+        user = User(timezone=container.settings.default_timezone)
+        session.add(user)
+        session.commit()
+        return user.id
+    finally:
+        session.close()
+
+
+def extract_connect_token(connect_url: str) -> str:
+    return parse_qs(urlparse(connect_url).query)["connect_token"][0]
 
 
 def test_reminder_create_and_delete_ambiguity(tmp_path):
@@ -207,6 +199,157 @@ def test_webhook_is_idempotent(tmp_path):
     assert second.status_code == 200
     assert len(container.telegram_adapter.sent) == 1
     assert second.json()["messages_sent"] == 0
+
+
+def test_google_oauth_start_consumes_signed_one_time_connect_token(tmp_path):
+    container = make_container(tmp_path)
+    app = create_app(container)
+    client = TestClient(app)
+    user_id = create_user(container)
+
+    session = container.session_factory()
+    try:
+        connect_url = container.google_service.issue_connect_url(session, user_id=user_id, platform="telegram")
+        token = extract_connect_token(connect_url)
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
+
+    assert response.status_code == 307
+    redirect_query = parse_qs(urlparse(response.headers["location"]).query)
+    assert redirect_query["client_id"] == ["test-google-client"]
+    assert "state" in redirect_query
+
+    session = container.session_factory()
+    try:
+        token_record = session.get(OAuthConnectToken, token)
+        oauth_state = session.scalar(select(OAuthState).where(OAuthState.state == redirect_query["state"][0]))
+        assert token_record is not None
+        assert token_record.used_at is not None
+        assert oauth_state is not None
+        assert oauth_state.user_id == user_id
+        assert oauth_state.platform == "telegram"
+    finally:
+        session.close()
+
+
+def test_google_oauth_start_rejects_reused_connect_token(tmp_path):
+    container = make_container(tmp_path)
+    app = create_app(container)
+    client = TestClient(app)
+    user_id = create_user(container)
+
+    session = container.session_factory()
+    try:
+        connect_url = container.google_service.issue_connect_url(session, user_id=user_id, platform="telegram")
+        token = extract_connect_token(connect_url)
+        session.commit()
+    finally:
+        session.close()
+
+    first = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
+    second = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
+
+    assert first.status_code == 307
+    assert second.status_code == 400
+
+
+def test_google_oauth_start_rejects_expired_connect_token(tmp_path):
+    container = make_container(tmp_path)
+    app = create_app(container)
+    client = TestClient(app)
+    user_id = create_user(container)
+
+    session = container.session_factory()
+    try:
+        connect_url = container.google_service.issue_connect_url(
+            session,
+            user_id=user_id,
+            platform="telegram",
+            expires_in=timedelta(minutes=-1),
+        )
+        token = extract_connect_token(connect_url)
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
+
+    assert response.status_code == 400
+
+
+def test_google_oauth_start_rejects_tampered_connect_token(tmp_path):
+    container = make_container(tmp_path)
+    app = create_app(container)
+    client = TestClient(app)
+    user_id = create_user(container)
+
+    session = container.session_factory()
+    try:
+        connect_url = container.google_service.issue_connect_url(session, user_id=user_id, platform="telegram")
+        token = extract_connect_token(connect_url)
+        session.commit()
+    finally:
+        session.close()
+
+    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    response = client.get("/auth/google/start", params={"connect_token": tampered}, follow_redirects=False)
+
+    assert response.status_code == 400
+
+
+def test_google_oauth_callback_saves_tokens_after_valid_start(tmp_path):
+    container = make_container(tmp_path)
+    app = create_app(container)
+    client = TestClient(app)
+    user_id = create_user(container)
+
+    session = container.session_factory()
+    try:
+        connect_url = container.google_service.issue_connect_url(session, user_id=user_id, platform="telegram")
+        token = extract_connect_token(connect_url)
+        session.commit()
+    finally:
+        session.close()
+
+    start = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
+    state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
+
+    def fake_exchange_code(code: str) -> GoogleTokenBundle:
+        assert code == "auth-code"
+        return GoogleTokenBundle(
+            access_token="access-token",
+            refresh_token="refresh-token",
+            expires_in=3600,
+            scope="openid email profile",
+            token_type="Bearer",
+            email="tester@example.com",
+        )
+
+    container.google_service.exchange_code = fake_exchange_code
+
+    callback = client.get("/auth/google/callback", params={"state": state, "code": "auth-code"})
+
+    assert callback.status_code == 200
+    assert "Google Calendar connected" in callback.text
+
+    session = container.session_factory()
+    try:
+        account = session.scalar(
+            select(OAuthAccount).where(
+                OAuthAccount.user_id == user_id,
+                OAuthAccount.provider == "google",
+            )
+        )
+        state_record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        assert account is not None
+        assert account.email == "tester@example.com"
+        assert account.refresh_token_encrypted is not None
+        assert state_record is None
+    finally:
+        session.close()
 
 
 def test_service_is_platform_agnostic_for_future_discord(tmp_path):
