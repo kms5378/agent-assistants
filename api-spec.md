@@ -381,6 +381,11 @@
 - `notes`
 - `created_from_message_id`
 - `canceled_at`
+- target-state 확장:
+  - `attempt_count`
+  - `last_error`
+  - `next_attempt_at`
+  - `max_attempts`
 
 ### 6.8 `reminder_deliveries`
 - `reminder_id`

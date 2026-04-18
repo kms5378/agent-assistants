@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.time import (
@@ -18,6 +19,9 @@ from app.core.time import (
     utcnow,
 )
 from app.models import Reminder, ReminderDelivery
+
+RETRY_DELAY = timedelta(minutes=3)
+DEFAULT_MAX_ATTEMPTS = 3
 
 
 @dataclass
@@ -69,6 +73,10 @@ class ReminderService:
             recurrence_rule=recurrence_rule_to_text(recurrence_config.as_dict()),
             next_fire_at=next_fire_at,
             status="scheduled",
+            attempt_count=0,
+            last_error=None,
+            next_attempt_at=None,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
             notes=notes,
             created_from_message_id=created_from_message_id,
         )
@@ -169,9 +177,19 @@ class ReminderService:
         }
 
     def claim_due_reminders(self, *, limit: int) -> list[Reminder]:
+        now = utcnow()
         statement: Select[tuple[Reminder]] = (
             select(Reminder)
-            .where(Reminder.status.in_(["scheduled", "pending"]), Reminder.next_fire_at <= utcnow())
+            .where(
+                or_(
+                    and_(Reminder.status == "scheduled", Reminder.next_fire_at <= now),
+                    and_(
+                        Reminder.status == "pending",
+                        Reminder.next_attempt_at.is_not(None),
+                        Reminder.next_attempt_at <= now,
+                    ),
+                )
+            )
             .order_by(Reminder.next_fire_at.asc())
             .limit(limit)
         )
@@ -185,17 +203,29 @@ class ReminderService:
         return reminders
 
     def mark_delivery_result(self, *, reminder: Reminder, success: bool, error: Optional[str] = None) -> None:
+        now = utcnow()
+        attempt_count = reminder.attempt_count + 1
+        next_attempt_at = None
+
+        if not success and attempt_count < reminder.max_attempts:
+            next_attempt_at = now + RETRY_DELAY
+
         delivery = ReminderDelivery(
             reminder_id=reminder.id,
             platform=reminder.source_platform,
             target_chat_id=reminder.source_chat_id,
             status="sent" if success else "failed",
-            attempt_count=1,
-            delivered_at=utcnow() if success else None,
+            attempt_count=attempt_count,
             last_error=error,
+            next_attempt_at=next_attempt_at,
+            max_attempts=reminder.max_attempts,
+            delivered_at=now if success else None,
         )
         self.session.add(delivery)
         if success:
+            reminder.attempt_count = 0
+            reminder.last_error = None
+            reminder.next_attempt_at = None
             if reminder.recurrence_type == "none":
                 reminder.status = "sent"
             else:
@@ -213,7 +243,13 @@ class ReminderService:
                 )
                 reminder.status = "scheduled"
         else:
-            reminder.status = "failed"
+            reminder.attempt_count = attempt_count
+            reminder.last_error = error
+            reminder.next_attempt_at = next_attempt_at
+            if attempt_count < reminder.max_attempts:
+                reminder.status = "pending"
+            else:
+                reminder.status = "failed"
         self.session.flush()
 
     def build_notification_text(self, reminder: Reminder) -> str:
@@ -227,6 +263,10 @@ class ReminderService:
             "due_at": ensure_aware(reminder.due_at).isoformat(),
             "next_fire_at": ensure_aware(reminder.next_fire_at).isoformat(),
             "status": reminder.status,
+            "attempt_count": reminder.attempt_count,
+            "last_error": reminder.last_error,
+            "next_attempt_at": ensure_aware(reminder.next_attempt_at).isoformat() if reminder.next_attempt_at else None,
+            "max_attempts": reminder.max_attempts,
             "recurrence_type": reminder.recurrence_type,
             "recurrence_rule": recurrence_rule_from_text(reminder.recurrence_rule),
             "notes": reminder.notes,

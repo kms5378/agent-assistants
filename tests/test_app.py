@@ -55,8 +55,22 @@ class RecordingTelegramAdapter(TelegramAdapter):
         self.sent.append(message)
 
 
-def make_container(tmp_path, model_client=None):
-    settings = Settings(
+class SequenceTelegramAdapter(RecordingTelegramAdapter):
+    def __init__(self, outcomes: list[bool]) -> None:
+        super().__init__()
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def send_message(self, message):
+        self.calls += 1
+        should_succeed = self.outcomes.pop(0) if self.outcomes else True
+        if not should_succeed:
+            raise RuntimeError(f"delivery failed #{self.calls}")
+        super().send_message(message)
+
+
+def make_container(tmp_path, model_client=None, persona_profile_path: Optional[str] = None):
+    settings_kwargs = dict(
         app_base_url="https://assistant.example.com",
         database_url=f"sqlite:///{tmp_path / 'assistant.db'}",
         telegram_webhook_secret="secret",
@@ -67,6 +81,9 @@ def make_container(tmp_path, model_client=None):
         default_timezone="Asia/Seoul",
         encryption_key="test-key",
     )
+    if persona_profile_path is not None:
+        settings_kwargs["persona_profile_path"] = persona_profile_path
+    settings = Settings(**settings_kwargs)
     session_factory = build_session_factory(settings)
     init_db(session_factory)
     return AppContainer(
@@ -429,6 +446,57 @@ def test_service_is_platform_agnostic_for_future_discord(tmp_path):
     assert outbound[0].text == "discord reply"
 
 
+def test_conversation_service_uses_persona_profile_from_settings_path(tmp_path):
+    persona_path = tmp_path / "custom-persona.yaml"
+    persona_path.write_text(
+        "\n".join(
+            [
+                'name: "Calm Planner"',
+                "tone_rules:",
+                '  - "Keep replies grounded and reassuring."',
+                '  - "Start in Korean unless the user clearly prefers English."',
+                "style_examples:",
+                '  - "일정을 차분하게 정리해드릴게요."',
+                '  - "필요한 정보만 짧게 먼저 말씀드릴게요."',
+                "response_length_rules:",
+                '  - "Default to two short sentences for routine replies."',
+                '  - "Expand only when the user asks for more detail."',
+                "disallowed_phrases:",
+                '  - "As an AI language model"',
+                '  - "제가 이미 전부 끝냈어요"',
+                'safety_disclaimer: "Do not pretend a tool action succeeded without confirmation."',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    model = FakeModel(ModelTurnResponse(response_id="r1", text="차분하게 도와드릴게요."))
+    container = make_container(
+        tmp_path,
+        model_client=model,
+        persona_profile_path=str(persona_path),
+    )
+    session = container.session_factory()
+    service = container.build_conversation_service(session)
+
+    outbound = service.handle_event(
+        InboundEvent(
+            platform="telegram",
+            external_user_id="tg-user",
+            chat_id="chat-1",
+            conversation_id="chat-1",
+            message_id="msg-1",
+            update_id="update-1",
+            text="오늘 일정 정리해줘",
+        )
+    )
+
+    assert outbound[0].text == "차분하게 도와드릴게요."
+    assert model.messages[0]["role"] == "system"
+    assert "Calm Planner" in model.messages[0]["content"]
+    assert "Keep replies grounded and reassuring." in model.messages[0]["content"]
+    assert "Default to two short sentences for routine replies." in model.messages[0]["content"]
+
+
 def test_worker_sends_due_reminder_once_and_reschedules_recurring(tmp_path):
     container = make_container(tmp_path)
     session = container.session_factory()
@@ -454,7 +522,102 @@ def test_worker_sends_due_reminder_once_and_reschedules_recurring(tmp_path):
     assert processed_first == 1
     assert len(container.telegram_adapter.sent) == 1
     assert reminder.status == "scheduled"
+    assert reminder.attempt_count == 0
+    assert reminder.last_error is None
+    assert reminder.next_attempt_at is None
+    assert reminder.max_attempts == 3
     assert ensure_aware(reminder.next_fire_at) > utcnow()
 
     processed_second = run_worker_once(container)
     assert processed_second == 0
+
+
+def test_worker_marks_one_time_reminder_sent_after_success(tmp_path):
+    container = make_container(tmp_path)
+    session = container.session_factory()
+    reminder_service = ReminderService(session, container.settings.default_timezone)
+
+    result = reminder_service.create_reminder(
+        user_id="user-1",
+        source_platform="telegram",
+        source_chat_id="chat-1",
+        created_from_message_id=None,
+        title="약 먹기",
+        due_at_local=(utcnow() + timedelta(hours=1)).astimezone().isoformat(),
+        timezone="Asia/Seoul",
+        recurrence={"type": "none"},
+        notes=None,
+    )
+    reminder = session.get(Reminder, result["reminder"]["id"])
+    reminder.next_fire_at = utcnow() - timedelta(minutes=1)
+    session.commit()
+
+    processed = run_worker_once(container)
+    session.refresh(reminder)
+
+    assert processed == 1
+    assert len(container.telegram_adapter.sent) == 1
+    assert reminder.status == "sent"
+    assert reminder.attempt_count == 0
+    assert reminder.last_error is None
+    assert reminder.next_attempt_at is None
+    assert reminder.max_attempts == 3
+
+
+def test_worker_retries_failed_delivery_three_times_then_marks_failed(tmp_path):
+    container = make_container(tmp_path)
+    container.telegram_adapter = SequenceTelegramAdapter([False, False, False])
+    session = container.session_factory()
+    reminder_service = ReminderService(session, container.settings.default_timezone)
+
+    result = reminder_service.create_reminder(
+        user_id="user-1",
+        source_platform="telegram",
+        source_chat_id="chat-1",
+        created_from_message_id=None,
+        title="운동 알림",
+        due_at_local=(utcnow() + timedelta(hours=1)).astimezone().isoformat(),
+        timezone="Asia/Seoul",
+        recurrence={"type": "none"},
+        notes=None,
+    )
+    reminder = session.get(Reminder, result["reminder"]["id"])
+    reminder.next_fire_at = utcnow() - timedelta(minutes=1)
+    session.commit()
+
+    processed_first = run_worker_once(container)
+    session.refresh(reminder)
+
+    assert processed_first == 1
+    assert reminder.status == "pending"
+    assert reminder.attempt_count == 1
+    assert reminder.last_error == "delivery failed #1"
+    assert reminder.max_attempts == 3
+    assert reminder.next_attempt_at is not None
+    assert ensure_aware(reminder.next_attempt_at) > utcnow()
+
+    processed_before_retry = run_worker_once(container)
+    assert processed_before_retry == 0
+
+    reminder.next_attempt_at = utcnow() - timedelta(seconds=1)
+    session.commit()
+    processed_second = run_worker_once(container)
+    session.refresh(reminder)
+
+    assert processed_second == 1
+    assert reminder.status == "pending"
+    assert reminder.attempt_count == 2
+    assert reminder.last_error == "delivery failed #2"
+    assert reminder.next_attempt_at is not None
+    assert ensure_aware(reminder.next_attempt_at) > utcnow()
+
+    reminder.next_attempt_at = utcnow() - timedelta(seconds=1)
+    session.commit()
+    processed_third = run_worker_once(container)
+    session.refresh(reminder)
+
+    assert processed_third == 1
+    assert reminder.status == "failed"
+    assert reminder.attempt_count == 3
+    assert reminder.last_error == "delivery failed #3"
+    assert reminder.next_attempt_at is None

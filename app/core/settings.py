@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_PERSONA_PROFILE_PATH = BASE_DIR / "config" / "persona" / "default.yaml"
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -45,6 +50,7 @@ class Settings:
         "openid email profile https://www.googleapis.com/auth/calendar.events",
     ) or "openid email profile https://www.googleapis.com/auth/calendar.events"
     default_timezone: str = _env("DEFAULT_TIMEZONE", "Asia/Seoul") or "Asia/Seoul"
+    persona_profile_path: str = _env("PERSONA_PROFILE_PATH", str(DEFAULT_PERSONA_PROFILE_PATH)) or str(DEFAULT_PERSONA_PROFILE_PATH)
     summary_trigger_messages: int = _int_env("SUMMARY_TRIGGER_MESSAGES", 10)
     recent_message_window: int = _int_env("RECENT_MESSAGE_WINDOW", 8)
     worker_poll_seconds: int = _int_env("WORKER_POLL_SECONDS", 5)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from sqlalchemy import select
@@ -9,20 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.contracts import InboundEvent, InternalUser, OutboundMessage
+from app.core.persona import PersonaProfile, load_persona_profile
 from app.core.settings import Settings
 from app.models import ChannelAccount, ConversationSummary, Message, User
 from app.services.openai_responses import ConversationModel
 from app.services.tool_router import ToolRouter
-
-
-SYSTEM_PROMPT = """You are a bilingual personal assistant for Telegram and future Discord channels.
-- Be concise, helpful, and natural.
-- Support Korean first, with English when the user uses English.
-- Use reminder and calendar tools when they are needed.
-- If a reminder time is incomplete or ambiguous, ask a follow-up question instead of calling a tool.
-- When deleting reminders, do not assume which one to delete if there are multiple matches.
-- If Google Calendar is not connected, explain that the user needs to connect Google and include the provided link.
-"""
 
 
 @dataclass
@@ -31,6 +22,10 @@ class ConversationService:
     settings: Settings
     model_client: ConversationModel
     tool_router: ToolRouter
+    persona_profile: PersonaProfile = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.persona_profile = load_persona_profile(self.settings.persona_profile_path)
 
     def handle_event(self, event: InboundEvent) -> list[OutboundMessage]:
         user = self._ensure_internal_user(event)
@@ -164,7 +159,7 @@ class ConversationService:
         self.session.flush()
 
     def _build_prompt_messages(self, *, user_id: str, platform: str, conversation_id: str) -> list[dict]:
-        items = [{"role": "system", "content": SYSTEM_PROMPT}]
+        items = [{"role": "system", "content": self.persona_profile.build_system_prompt(platform=platform)}]
         summary = self.session.scalar(
             select(ConversationSummary).where(
                 ConversationSummary.user_id == user_id,
