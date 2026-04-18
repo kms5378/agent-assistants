@@ -16,6 +16,7 @@ FastAPI 기반의 대화형 Telegram assistant 입니다. 현재 구현 범위�
 - `workflow.md`: 런타임 및 구현 순서도
 - `hand-off.md`: 인수인계 및 후속 작업 기준
 - `checklist.md`: phase별 실행 체크리스트
+- `operations.md`: EC2 운영 배포, Certbot, Telegram webhook, 스모크 테스트 가이드
 
 ## Local Run
 
@@ -38,4 +39,14 @@ python -m app.worker
 docker compose up --build
 ```
 
-운영 시 `nginx/nginx.conf`의 도메인/인증서 경로를 실제 값으로 수정해야 합니다.
+기본 `docker compose`는 로컬 스모크 테스트를 위해 `nginx/docker-compose.conf`의 HTTP 프록시 설정을 사용합니다.
+운영 HTTPS 배포 시에는 `nginx/nginx.conf`의 도메인/인증서 경로를 실제 값으로 맞춰 별도 적용해야 합니다.
+
+운영 배포는 아래 명령을 기준으로 합니다.
+
+```bash
+docker compose -f docker-compose.prod.yml up -d postgres app worker
+docker compose -f docker-compose.prod.yml up -d nginx
+```
+
+Certbot 발급/갱신, `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차는 `operations.md`를 따릅니다.

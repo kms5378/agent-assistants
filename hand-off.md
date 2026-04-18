@@ -6,67 +6,52 @@
 - 운영은 단일 EC2에서 수행하고, 이후 Discord와 TTS로 확장할 수 있는 구조를 확보한다.
 
 ## 2. 현재 상태 요약
-- FastAPI app skeleton 존재
-- Telegram webhook endpoint 존재
-- OpenAI Responses function-calling loop 존재
-- reminder CRUD 및 polling worker 존재
-- Google OAuth / Calendar 기본 경계 존재
-- pytest 기반 기본 테스트 존재
+- 2026-04-18 기준 Phase 1부터 Phase 5까지 완료
+- FastAPI app skeleton, Telegram webhook endpoint, OpenAI Responses function-calling loop 동작
+- Google OAuth 연결이 `signed one-time connect token` 기반으로 전환됨
+- Postgres 런타임 정리가 반영되어 `psycopg`, baseline schema migration 기록, pre-ping, compose healthcheck/readiness가 포함됨
+- reminder CRUD, polling worker, 3분 간격 최대 3회 재시도 정책이 반영됨
+- 하드코딩 system prompt가 persona profile 설정 계층으로 분리되었고 기본 프로필은 `config/persona/default.yaml`로 관리됨
+- `PERSONA_PROFILE_PATH`로 persona 교체 가능
+- `operations.md`, `docker-compose.prod.yml`, `nginx/nginx.conf` 기준의 운영 배포 문서가 추가됨
+- Certbot 발급/갱신, Telegram `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차가 문서화됨
+- pytest 기반 회귀 테스트가 OAuth connect token, Postgres runtime, retry policy, persona 교체 시나리오까지 포함하도록 확장됨
 - Dockerfile, docker-compose, nginx 템플릿 존재
 
-## 3. 최우선 후속 작업
+## 3. 이번 턴까지 완료된 작업
 
-### P0. OAuth 연결 보안
-- `user_id` 직접 노출 방식 제거
-- `signed one-time connect token` 설계 및 구현
-- 필요 테이블:
-  - `oauth_connect_tokens`
-- 필수 컬럼:
-  - `token`
-  - `user_id`
-  - `platform`
-  - `expires_at`
-  - `used_at`
-- 완료 기준:
-  - 링크 유출 시에도 타 계정 연결 불가
-  - 같은 token 재사용 불가
+### 완료. OAuth 연결 보안
+- `oauth_connect_tokens` 테이블 및 signed one-time connect token 생성/검증 로직 반영
+- Google 시작 URL이 `connect_token` 기반으로 동작하도록 전환
+- 만료 / 재사용 / 위조 토큰 테스트 추가
 
-### P0. Postgres 런타임 정리
+### 완료. Postgres 런타임 정리
 - `psycopg` 의존성 추가
-- compose 환경에서 app/worker가 Postgres 연결 가능해야 함
-- 완료 기준:
-  - `docker compose up --build` 후 app/worker 정상 부팅
+- DB 초기화 시 baseline schema migration 기록 추가
+- Postgres 연결 시 engine pre-ping 설정 반영
+- `docker-compose`에서 Postgres healthcheck 및 app/worker readiness 반영
+- Postgres 관련 회귀 테스트와 compose 스모크 테스트 기준 반영
 
-### P1. Reminder Retry Policy
-- 현재 worker를 3분 3회 재시도 정책으로 확장
-- 추천 변경:
-  - `attempt_count`
-  - `last_error`
-  - `next_attempt_at`
-  - `max_attempts`
-- 상태 전이:
-  - `scheduled -> processing -> sent`
-  - `scheduled -> processing -> pending`
-  - `pending -> processing -> failed`
-- 완료 기준:
-  - 일시적 실패는 자동 재시도
-  - 3회 초과 시 최종 `failed`
+### 완료. Reminder Retry Policy
+- `attempt_count`, `last_error`, `next_attempt_at`, `max_attempts` 필드 반영
+- worker 상태 전이를 `scheduled/pending -> processing -> sent/failed`로 정리
+- 3분 간격 3회 재시도 테스트 추가
 
-### P1. Persona Layer
-- 하드코딩 system prompt를 `persona profile`로 분리
-- 추천 파일:
-  - `config/persona/default.yaml`
-- 최소 항목:
-  - `name`
-  - `tone_rules`
-  - `style_examples`
-  - `response_length_rules`
-  - `disallowed_phrases`
-  - `safety_disclaimer`
-- 완료 기준:
-  - 코드 수정 없이 persona 교체 가능
+### 완료. Persona Layer
+- 하드코딩 system prompt를 persona profile 로더로 분리
+- 기본 persona 파일 `config/persona/default.yaml` 추가
+- `PERSONA_PROFILE_PATH` 환경 변수 경로 교체 기반 persona 변경 지원
+- persona 교체 테스트 추가
 
-### P2. TTS Abstraction
+### 완료. 운영 문서 정리
+- `operations.md`에 EC2 배포, nginx, Certbot, Telegram `setWebhook`, 스모크 테스트 절차 추가
+- `docker-compose.prod.yml`에 운영용 app/worker/postgres/nginx 스택 예시 추가
+- `nginx/nginx.conf`를 운영 HTTPS reverse proxy 기준으로 정리
+- `README.md`에 로컬 compose와 운영 compose 사용 경로를 분리해 안내
+
+## 4. 최우선 후속 작업
+
+### P1. TTS Abstraction
 - 구현은 마지막 단계
 - 먼저 provider-agnostic interface만 설계
 - 운영 방식:
@@ -75,16 +60,20 @@
 - 완료 기준:
   - provider를 바꿔도 conversation 로직 변경 없음
 
-## 4. 권장 구현 순서
-1. OAuth connect token 테이블과 검증 로직 추가
-2. Postgres driver, migration baseline, compose smoke test 완료
-3. reminder retry policy 반영
-4. persona profile 설정 계층 추가
-5. 운영용 nginx / certbot / webhook 등록 절차 문서화
-6. TTS interface 설계
-7. 마지막 단계에서 실제 TTS provider 연결
+### P2. 운영 자동화 보강
+- Certbot renew hook를 운영 스크립트 또는 systemd timer로 정착
+- Telegram `setWebhook` 등록/검증을 스크립트화
+- 완료 기준:
+  - 신규 배포와 재배포 때 수동 입력 단계를 줄일 수 있어야 함
 
-## 5. 테스트 체크리스트
+## 5. 남은 구현 순서
+1. TTS interface 설계
+2. global single TTS profile 경로 추가
+3. conversation 후처리 연결 지점 정의
+4. 마지막 단계에서 실제 TTS provider 연결
+5. Certbot renew / Telegram webhook 운영 스크립트 자동화
+
+## 6. 테스트 체크리스트
 - webhook secret/path 검증
 - duplicate Telegram update replay 방지
 - reminder create / search / delete / list
@@ -96,7 +85,7 @@
 - persona profile 교체 후 응답 스타일 변경
 - Discord adapter가 없어도 service layer가 channel-agnostic 유지
 
-## 6. 운영 체크리스트
+## 7. 운영 체크리스트
 - EC2 인스턴스 준비
 - Elastic IP 연결
 - 도메인 DNS 레코드 연결
@@ -107,7 +96,7 @@
 - `.env` secrets 입력
 - healthz / webhook / OAuth smoke test
 
-## 7. 환경 변수 기준
+## 8. 환경 변수 기준
 - `APP_BASE_URL`
 - `DATABASE_URL`
 - `OPENAI_API_KEY`
@@ -124,7 +113,7 @@
   - `TTS_PROFILE_PATH`
   - `TTS_PROVIDER`
 
-## 8. 의사결정 로그
+## 9. 의사결정 로그
 - runtime: `Python 3.11 + FastAPI`
 - ingress: Telegram webhook only
 - infra: single EC2 + nginx + postgres + worker
@@ -135,8 +124,10 @@
 - retry policy: 3 minutes, 3 attempts, then failed
 - Discord: adapter-ready only, not in MVP
 
-## 9. 인수인계 시 주의점
-- 현재 코드에는 `oauth_states`가 있으나 target-state는 `signed one-time connect token` 구조다
-- 현재 worker는 retry policy가 아직 fully baked 상태가 아니므로 우선 수정 대상이다
-- persona/TTS는 문서상 확정되었지만 코드에는 아직 반영되지 않았다
-- 운영 문서는 Certbot과 Telegram webhook 등록 절차까지 반드시 포함해야 한다
+## 10. 인수인계 시 주의점
+- OAuth 시작 진입점은 이미 `connect_token` 기반이므로, 이후 수정 시 `user_id` 직접 노출 방식으로 되돌리지 않도록 주의
+- reminder worker는 3분 간격 최대 3회 재시도 정책이 반영되어 있으므로, 상태 전이와 `next_attempt_at` 처리 규칙을 함께 유지해야 함
+- persona는 코드 상수 수정이 아니라 `config/persona/*.yaml`과 `PERSONA_PROFILE_PATH`로 교체하는 구조를 유지해야 함
+- 로컬 compose는 `docker-compose.yml` + `nginx/docker-compose.conf`, 운영 compose는 `docker-compose.prod.yml` + `nginx/nginx.conf` 조합을 유지해야 함
+- 운영 문서 수정 시 `operations.md`의 Certbot, `setWebhook`, smoke test 절차를 함께 갱신해야 함
+- 다음 구현 우선순위는 Phase 6 TTS abstraction, 이후 운영 자동화 보강 순서임
