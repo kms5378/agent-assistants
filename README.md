@@ -51,4 +51,4 @@ docker compose -f docker-compose.prod.yml up -d nginx
 ```
 
 Certbot 발급/갱신, `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차는 `operations.md`를 따릅니다.
-운영 자동화가 필요하면 `scripts/ops/install-certbot-timer.sh`, `scripts/ops/telegram-webhook.sh`, `scripts/ops/smoke-test.sh`를 사용합니다.
+운영 자동화가 필요하면 `scripts/ops/local-preflight.sh`, `scripts/ops/install-certbot-timer.sh`, `scripts/ops/telegram-webhook.sh`, `scripts/ops/smoke-test.sh`를 사용합니다.

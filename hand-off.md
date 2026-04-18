@@ -17,6 +17,8 @@
 - Certbot 발급/갱신, Telegram `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차가 문서화됨
 - `scripts/ops/`에 Certbot renew, Telegram webhook, smoke test 자동화 스크립트가 추가됨
 - `deploy/systemd/`에 Certbot renew service/timer 템플릿이 추가됨
+- `scripts/ops/local-preflight.sh`로 로컬 compose + 운영 스모크 테스트 리허설이 가능함
+- `cloudflared` quick tunnel 기반으로 Telegram webhook 실등록 후 실제 Telegram 대화 응답까지 로컬에서 검증함
 - pytest 기반 회귀 테스트가 OAuth connect token, Postgres runtime, retry policy, persona 교체 시나리오까지 포함하도록 확장됨
 - Dockerfile, docker-compose, nginx 템플릿 존재
 
@@ -58,12 +60,20 @@
 - `scripts/ops/smoke-test.sh`로 healthz/webhook/OAuth 스모크 테스트 자동화 추가
 - 운영 자동화 스크립트 회귀 테스트 추가
 
+### 완료. 로컬 운영 리허설
+- `scripts/ops/local-preflight.sh`로 로컬 compose 부팅과 `healthz/webhook/OAuth invalid token` 검증 자동화 추가
+- 공백 포함 env 값을 안전하게 읽도록 ops env 로더 정리
+- OpenAI strict tool schema 요구사항에 맞춰 function schema를 보정
+- Telegram webhook 실패 시 `conversation` / `delivery` 단계가 구분된 구조화 오류 응답을 반환하도록 개선
+- `cloudflared` quick tunnel로 공개 HTTPS URL을 열고 Telegram `setWebhook` 실제 등록 후 실제 봇 응답까지 확인
+
 ## 4. 최우선 후속 작업
 
 ### P1. 실서버 배포 리허설
 - EC2 실제 경로 기준으로 systemd timer 설치
 - 운영 `.env`와 도메인으로 webhook 등록/검증 실행
 - 운영 URL 대상으로 smoke test 실행
+- 운영 URL 기준 Google OAuth redirect URI와 실제 연결 흐름 확인
 - 완료 기준:
   - 문서와 스크립트만으로 신규 서버에서 재현 가능한 배포가 검증되어야 함
 
@@ -77,13 +87,14 @@
   - provider를 바꿔도 conversation 로직 변경 없음
 
 ## 5. 남은 구현 순서
-1. EC2 실제 경로 기준 systemd timer 설치 및 dry-run 검증
-2. 운영 URL로 Telegram webhook 등록/검증 실행
-3. 운영 URL로 smoke test 실행
-4. TTS interface 설계
-5. global single TTS profile 경로 추가
-6. conversation 후처리 연결 지점 정의
-7. 마지막 단계에서 실제 TTS provider 연결
+1. 운영 도메인 기준 Google OAuth redirect URI 반영 및 실연결 확인
+2. EC2 실제 경로 기준 systemd timer 설치 및 dry-run 검증
+3. 운영 URL로 Telegram webhook 등록/검증 실행
+4. 운영 URL로 smoke test 실행
+5. TTS interface 설계
+6. global single TTS profile 경로 추가
+7. conversation 후처리 연결 지점 정의
+8. 마지막 단계에서 실제 TTS provider 연결
 
 ## 6. 테스트 체크리스트
 - webhook secret/path 검증
@@ -142,4 +153,5 @@
 - persona는 코드 상수 수정이 아니라 `config/persona/*.yaml`과 `PERSONA_PROFILE_PATH`로 교체하는 구조를 유지해야 함
 - 로컬 compose는 `docker-compose.yml` + `nginx/docker-compose.conf`, 운영 compose는 `docker-compose.prod.yml` + `nginx/nginx.conf` 조합을 유지해야 함
 - 운영 자동화 수정 시 `scripts/ops/`, `deploy/systemd/`, `operations.md`를 함께 갱신해야 함
+- 로컬 실응답 검증은 `cloudflared` quick tunnel로 재현 가능하지만, quick tunnel URL은 매 실행마다 바뀌므로 영구 운영 주소로 사용하지 않음
 - TTS는 마지막 단계로 유지하고, 그 전에는 실서버 배포 리허설과 운영 검증을 먼저 끝내는 순서를 유지해야 함

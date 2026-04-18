@@ -13,6 +13,7 @@ OPS_SCRIPTS = [
     REPO_ROOT / "scripts" / "ops" / "telegram-webhook.sh",
     REPO_ROOT / "scripts" / "ops" / "smoke-test.sh",
     REPO_ROOT / "scripts" / "ops" / "install-certbot-timer.sh",
+    REPO_ROOT / "scripts" / "ops" / "local-preflight.sh",
 ]
 
 
@@ -158,6 +159,7 @@ def test_smoke_test_script_checks_expected_routes(tmp_path: Path):
         "\n".join(
             [
                 "APP_BASE_URL=https://assistant.example.com",
+                "GOOGLE_OAUTH_SCOPES=openid email profile https://www.googleapis.com/auth/calendar.events",
                 "TELEGRAM_WEBHOOK_KEY=hook-key",
                 "TELEGRAM_WEBHOOK_SECRET=secret-token",
             ]

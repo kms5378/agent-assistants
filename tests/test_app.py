@@ -25,6 +25,7 @@ from app.models import OAuthAccount, OAuthConnectToken, OAuthState, Reminder, Sc
 from app.services.conversation import ConversationService
 from app.services.google_calendar import GoogleOAuthService, GoogleTokenBundle
 from app.services.reminders import ReminderService
+from app.services.tool_router import ToolRouter
 from app.worker import run_worker_loop, run_worker_once
 
 
@@ -273,6 +274,36 @@ def test_webhook_is_idempotent(tmp_path):
     assert second.json()["messages_sent"] == 0
 
 
+def test_webhook_returns_structured_error_when_delivery_fails(tmp_path):
+    container = make_container(tmp_path)
+    container.telegram_adapter = SequenceTelegramAdapter([False])
+    app = create_app(container)
+    client = TestClient(app)
+    payload = {
+        "update_id": 101,
+        "message": {
+            "message_id": 11,
+            "text": "안녕",
+            "chat": {"id": 777},
+            "from": {"id": 999, "first_name": "Tester"},
+        },
+    }
+
+    response = client.post(
+        "/webhooks/telegram/hook-key",
+        json=payload,
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret"},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "ok": False,
+        "stage": "delivery",
+        "detail": "Telegram delivery failed.",
+        "error_type": "RuntimeError",
+    }
+
+
 def test_google_oauth_start_consumes_signed_one_time_connect_token(tmp_path):
     container = make_container(tmp_path)
     app = create_app(container)
@@ -495,6 +526,25 @@ def test_conversation_service_uses_persona_profile_from_settings_path(tmp_path):
     assert "Calm Planner" in model.messages[0]["content"]
     assert "Keep replies grounded and reassuring." in model.messages[0]["content"]
     assert "Default to two short sentences for routine replies." in model.messages[0]["content"]
+
+
+def test_tool_definitions_use_strict_compatible_required_fields(tmp_path):
+    container = make_container(tmp_path)
+    session = container.session_factory()
+    try:
+        reminder_service = ReminderService(session, container.settings.default_timezone)
+        router = ToolRouter(reminder_service=reminder_service, google_service=container.google_service)
+        tools = router.tool_definitions()
+    finally:
+        session.close()
+
+    for tool in tools:
+        parameters = tool["parameters"]
+        required = set(parameters.get("required", []))
+        assert required == set(parameters["properties"].keys())
+
+    recurrence = tools[0]["parameters"]["properties"]["recurrence"]
+    assert set(recurrence["required"]) == set(recurrence["properties"].keys())
 
 
 def test_worker_sends_due_reminder_once_and_reschedules_recurring(tmp_path):

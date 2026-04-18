@@ -28,11 +28,31 @@ require_commands() {
 load_env_file() {
     local env_file="${ENV_FILE:-$(repo_root_dir)/.env}"
     [[ -f "$env_file" ]] || die "Env file not found: $env_file"
+    local line
+    local key
+    local value
 
-    set -a
-    # shellcheck disable=SC1090
-    source "$env_file"
-    set +a
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+
+            if [[ "${value:0:1}" == "\"" && "${value: -1}" == "\"" ]]; then
+                value="${value:1:${#value}-2}"
+            elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+                value="${value:1:${#value}-2}"
+            fi
+
+            export "$key=$value"
+            continue
+        fi
+
+        die "Unsupported env file line: $line"
+    done < "$env_file"
 }
 
 require_envs() {

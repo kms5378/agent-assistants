@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
+import logging
 from typing import Optional
 
 import httpx
@@ -22,6 +23,8 @@ from app.services.google_calendar import GoogleOAuthService, InvalidConnectToken
 from app.services.openai_responses import OpenAIResponsesClient
 from app.services.reminders import ReminderService
 from app.services.tool_router import ToolRouter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -97,10 +100,64 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
 
         session = resolved_container.session_factory()
         try:
-            service = resolved_container.build_conversation_service(session)
-            outbound_messages = service.handle_event(event)
-            for outbound in outbound_messages:
-                resolved_container.telegram_adapter.send_message(outbound)
+            try:
+                service = resolved_container.build_conversation_service(session)
+                outbound_messages = service.handle_event(event)
+            except Exception as exc:
+                logger.exception("Conversation processing failed for telegram update %s", event.update_id)
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={
+                        "ok": False,
+                        "stage": "conversation",
+                        "detail": "Conversation processing failed.",
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+
+            try:
+                for outbound in outbound_messages:
+                    resolved_container.telegram_adapter.send_message(outbound)
+            except httpx.HTTPStatusError as exc:
+                logger.warning(
+                    "Telegram delivery failed for update %s with status %s",
+                    event.update_id,
+                    exc.response.status_code,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={
+                        "ok": False,
+                        "stage": "delivery",
+                        "detail": "Telegram delivery failed.",
+                        "error_type": exc.__class__.__name__,
+                        "upstream_status": exc.response.status_code,
+                        "upstream_body": (exc.response.text or "")[:200],
+                    },
+                )
+            except httpx.HTTPError as exc:
+                logger.warning("Telegram delivery network error for update %s", event.update_id)
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={
+                        "ok": False,
+                        "stage": "delivery",
+                        "detail": "Telegram delivery failed.",
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+            except Exception as exc:
+                logger.exception("Telegram delivery crashed for update %s", event.update_id)
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content={
+                        "ok": False,
+                        "stage": "delivery",
+                        "detail": "Telegram delivery failed.",
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+
             return JSONResponse({"ok": True, "messages_sent": len(outbound_messages)})
         finally:
             session.close()

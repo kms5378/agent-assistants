@@ -37,6 +37,8 @@
 - [x] Certbot renew systemd timer 템플릿 추가
 - [x] Telegram `setWebhook` 등록/검증 스크립트 추가
 - [x] healthz/webhook/OAuth 스모크 테스트 스크립트 추가
+- [x] 로컬 `local-preflight` 리허설 추가
+- [x] tunnel 기반 Telegram 실응답 검증
 
 ## Phase 6. TTS Abstraction
 - [ ] provider-agnostic TTS interface 설계

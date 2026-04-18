@@ -73,6 +73,48 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml ps
 ```
 
+## 5.1 로컬 운영 리허설
+- EC2 올리기 전에는 아래 명령으로 로컬 compose 기동과 운영 스모크 테스트를 한 번에 실행할 수 있다.
+
+```bash
+./scripts/ops/local-preflight.sh
+```
+
+- compose를 띄운 상태로 유지하고 싶으면 아래 옵션을 사용한다.
+
+```bash
+./scripts/ops/local-preflight.sh --keep-running
+```
+
+- 이 리허설은 `http://localhost` 기준 `healthz`, webhook 404/403/200, OAuth invalid token`을 검증한다.
+- Telegram `setWebhook` 실제 등록은 공개 HTTPS URL이 필요하므로 EC2 또는 tunnel 환경에서만 진행한다.
+
+## 5.2 로컬 Telegram 실응답 리허설
+- 실제 Telegram 메시지 왕복까지 보려면 공개 HTTPS URL이 필요하다.
+- 로컬 nginx가 `80` 포트에서 떠 있는 상태에서 `cloudflared` quick tunnel을 임시로 열 수 있다.
+
+```bash
+cloudflared tunnel --url http://localhost:80
+```
+
+- 출력된 `https://...trycloudflare.com` 주소를 임시 `APP_BASE_URL`로 사용한다.
+- 영구 `.env`를 직접 덮어쓰지 말고 임시 env 파일을 만들어 아래 값을 바꾼다.
+  - `APP_BASE_URL=https://<quick-tunnel-domain>`
+  - `GOOGLE_REDIRECT_URI=https://<quick-tunnel-domain>/auth/google/callback`
+
+```bash
+cp .env /tmp/personal-ai-assistant-tunnel.env
+```
+
+- 그다음 임시 env 파일로 Telegram webhook을 등록한다.
+
+```bash
+./scripts/ops/telegram-webhook.sh --env-file /tmp/personal-ai-assistant-tunnel.env
+```
+
+- 이후 Telegram에서 봇에게 실제 메시지를 보내 응답이 오는지 확인한다.
+- quick tunnel 주소는 실행마다 바뀌므로 테스트가 끝나면 필요 시 다시 등록해야 한다.
+
 ## 6. Certbot 갱신 절차
 - 현재 운영 가이드는 `standalone` 모드를 기준으로 한다.
 - 갱신 시 80 포트를 Certbot이 잠깐 사용해야 하므로 nginx를 잠시 내렸다가 다시 올린다.
@@ -173,6 +215,7 @@ curl -i "https://your-domain.example.com/auth/google/start?connect_token=invalid
 - `nginx/nginx.conf`: 운영 HTTPS 프록시
 - `scripts/ops/certbot-renew.sh`: nginx stop/start를 포함한 Certbot renew 래퍼
 - `scripts/ops/install-certbot-timer.sh`: systemd service/timer 설치 스크립트
+- `scripts/ops/local-preflight.sh`: 로컬 compose 부팅 + 운영 스모크 테스트 실행
 - `scripts/ops/telegram-webhook.sh`: Telegram webhook 등록/검증 스크립트
 - `scripts/ops/smoke-test.sh`: healthz/webhook/OAuth 스모크 테스트 스크립트
 - `deploy/systemd/`: Certbot renew systemd 템플릿
