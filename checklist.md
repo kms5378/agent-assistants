@@ -1,10 +1,10 @@
 # Checklist
 
 ## Phase 1. OAuth 연결 보안
-- [ ] `oauth_connect_tokens` 테이블 추가
-- [ ] signed one-time connect token 생성/검증 로직 추가
-- [ ] Google 시작 URL을 `connect_token` 기반으로 전환
-- [ ] 만료/재사용/위조 토큰 테스트 추가
+- [x] `oauth_connect_tokens` 테이블 추가
+- [x] signed one-time connect token 생성/검증 로직 추가
+- [x] Google 시작 URL을 `connect_token` 기반으로 전환
+- [x] 만료/재사용/위조 토큰 테스트 추가
 
 ## Phase 2. Postgres 런타임 정리
 - [x] `psycopg` 의존성 추가
