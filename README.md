@@ -17,6 +17,7 @@ FastAPI 기반의 대화형 Telegram assistant 입니다. 현재 구현 범위�
 - `hand-off.md`: 인수인계 및 후속 작업 기준
 - `checklist.md`: phase별 실행 체크리스트
 - `operations.md`: EC2 운영 배포, Certbot, Telegram webhook, 스모크 테스트 가이드
+- `scripts/ops/`: 운영 자동화 스크립트 모음
 
 ## Local Run
 
@@ -50,3 +51,4 @@ docker compose -f docker-compose.prod.yml up -d nginx
 ```
 
 Certbot 발급/갱신, `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차는 `operations.md`를 따릅니다.
+운영 자동화가 필요하면 `scripts/ops/install-certbot-timer.sh`, `scripts/ops/telegram-webhook.sh`, `scripts/ops/smoke-test.sh`를 사용합니다.

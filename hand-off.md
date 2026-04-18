@@ -15,6 +15,8 @@
 - `PERSONA_PROFILE_PATH`로 persona 교체 가능
 - `operations.md`, `docker-compose.prod.yml`, `nginx/nginx.conf` 기준의 운영 배포 문서가 추가됨
 - Certbot 발급/갱신, Telegram `setWebhook`, healthz/webhook/OAuth 스모크 테스트 절차가 문서화됨
+- `scripts/ops/`에 Certbot renew, Telegram webhook, smoke test 자동화 스크립트가 추가됨
+- `deploy/systemd/`에 Certbot renew service/timer 템플릿이 추가됨
 - pytest 기반 회귀 테스트가 OAuth connect token, Postgres runtime, retry policy, persona 교체 시나리오까지 포함하도록 확장됨
 - Dockerfile, docker-compose, nginx 템플릿 존재
 
@@ -49,9 +51,23 @@
 - `nginx/nginx.conf`를 운영 HTTPS reverse proxy 기준으로 정리
 - `README.md`에 로컬 compose와 운영 compose 사용 경로를 분리해 안내
 
+### 완료. 운영 자동화 보강
+- `scripts/ops/certbot-renew.sh`로 nginx stop/start를 포함한 Certbot renew 자동화 추가
+- `scripts/ops/install-certbot-timer.sh`와 `deploy/systemd/` 템플릿으로 systemd timer 설치 경로 추가
+- `scripts/ops/telegram-webhook.sh`로 Telegram webhook 등록/검증 자동화 추가
+- `scripts/ops/smoke-test.sh`로 healthz/webhook/OAuth 스모크 테스트 자동화 추가
+- 운영 자동화 스크립트 회귀 테스트 추가
+
 ## 4. 최우선 후속 작업
 
-### P1. TTS Abstraction
+### P1. 실서버 배포 리허설
+- EC2 실제 경로 기준으로 systemd timer 설치
+- 운영 `.env`와 도메인으로 webhook 등록/검증 실행
+- 운영 URL 대상으로 smoke test 실행
+- 완료 기준:
+  - 문서와 스크립트만으로 신규 서버에서 재현 가능한 배포가 검증되어야 함
+
+### P2. TTS Abstraction
 - 구현은 마지막 단계
 - 먼저 provider-agnostic interface만 설계
 - 운영 방식:
@@ -60,18 +76,14 @@
 - 완료 기준:
   - provider를 바꿔도 conversation 로직 변경 없음
 
-### P2. 운영 자동화 보강
-- Certbot renew hook를 운영 스크립트 또는 systemd timer로 정착
-- Telegram `setWebhook` 등록/검증을 스크립트화
-- 완료 기준:
-  - 신규 배포와 재배포 때 수동 입력 단계를 줄일 수 있어야 함
-
 ## 5. 남은 구현 순서
-1. TTS interface 설계
-2. global single TTS profile 경로 추가
-3. conversation 후처리 연결 지점 정의
-4. 마지막 단계에서 실제 TTS provider 연결
-5. Certbot renew / Telegram webhook 운영 스크립트 자동화
+1. EC2 실제 경로 기준 systemd timer 설치 및 dry-run 검증
+2. 운영 URL로 Telegram webhook 등록/검증 실행
+3. 운영 URL로 smoke test 실행
+4. TTS interface 설계
+5. global single TTS profile 경로 추가
+6. conversation 후처리 연결 지점 정의
+7. 마지막 단계에서 실제 TTS provider 연결
 
 ## 6. 테스트 체크리스트
 - webhook secret/path 검증
@@ -129,5 +141,5 @@
 - reminder worker는 3분 간격 최대 3회 재시도 정책이 반영되어 있으므로, 상태 전이와 `next_attempt_at` 처리 규칙을 함께 유지해야 함
 - persona는 코드 상수 수정이 아니라 `config/persona/*.yaml`과 `PERSONA_PROFILE_PATH`로 교체하는 구조를 유지해야 함
 - 로컬 compose는 `docker-compose.yml` + `nginx/docker-compose.conf`, 운영 compose는 `docker-compose.prod.yml` + `nginx/nginx.conf` 조합을 유지해야 함
-- 운영 문서 수정 시 `operations.md`의 Certbot, `setWebhook`, smoke test 절차를 함께 갱신해야 함
-- 다음 구현 우선순위는 Phase 6 TTS abstraction, 이후 운영 자동화 보강 순서임
+- 운영 자동화 수정 시 `scripts/ops/`, `deploy/systemd/`, `operations.md`를 함께 갱신해야 함
+- TTS는 마지막 단계로 유지하고, 그 전에는 실서버 배포 리허설과 운영 검증을 먼저 끝내는 순서를 유지해야 함

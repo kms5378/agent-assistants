@@ -33,6 +33,10 @@
 - [x] Certbot 인증서 발급/갱신 절차 문서화
 - [x] Telegram `setWebhook` 등록 절차 문서화
 - [x] healthz/webhook/OAuth 스모크 테스트 절차 문서화
+- [x] Certbot renew 스크립트 추가
+- [x] Certbot renew systemd timer 템플릿 추가
+- [x] Telegram `setWebhook` 등록/검증 스크립트 추가
+- [x] healthz/webhook/OAuth 스모크 테스트 스크립트 추가
 
 ## Phase 6. TTS Abstraction
 - [ ] provider-agnostic TTS interface 설계

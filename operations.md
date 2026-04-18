@@ -76,45 +76,44 @@ docker compose -f docker-compose.prod.yml ps
 ## 6. Certbot 갱신 절차
 - 현재 운영 가이드는 `standalone` 모드를 기준으로 한다.
 - 갱신 시 80 포트를 Certbot이 잠깐 사용해야 하므로 nginx를 잠시 내렸다가 다시 올린다.
+- 수동 renew 대신 `scripts/ops/certbot-renew.sh`와 `scripts/ops/install-certbot-timer.sh`를 사용한다.
 
 ```bash
-sudo certbot renew --standalone \
-  --pre-hook 'cd /srv/personal_ai_assistant_ver2.0 && docker compose -f docker-compose.prod.yml stop nginx' \
-  --post-hook 'cd /srv/personal_ai_assistant_ver2.0 && docker compose -f docker-compose.prod.yml up -d nginx'
+sudo /srv/personal_ai_assistant_ver2.0/scripts/ops/certbot-renew.sh
 ```
 
 - 실제 cron 또는 systemd timer에 등록하기 전에 아래 dry-run으로 검증한다.
 
 ```bash
-sudo certbot renew --dry-run --standalone \
-  --pre-hook 'cd /srv/personal_ai_assistant_ver2.0 && docker compose -f docker-compose.prod.yml stop nginx' \
-  --post-hook 'cd /srv/personal_ai_assistant_ver2.0 && docker compose -f docker-compose.prod.yml up -d nginx'
+sudo /srv/personal_ai_assistant_ver2.0/scripts/ops/certbot-renew.sh --dry-run
+```
+
+- systemd timer는 아래 스크립트로 설치한다.
+
+```bash
+sudo /srv/personal_ai_assistant_ver2.0/scripts/ops/install-certbot-timer.sh
 ```
 
 ## 7. Telegram `setWebhook` 등록
-1. `.env`를 로드한다.
+1. 운영 `.env`를 읽어 webhook을 등록한다.
 
 ```bash
-set -a
-source .env
-set +a
+./scripts/ops/telegram-webhook.sh
 ```
 
-2. webhook을 등록한다.
+2. 현재 webhook 구성이 기대 URL과 일치하는지 검증한다.
 
 ```bash
-curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-  -d "url=${APP_BASE_URL}/webhooks/telegram/${TELEGRAM_WEBHOOK_KEY}" \
-  -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
-```
-
-3. 등록 결과를 확인한다.
-
-```bash
-curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+./scripts/ops/telegram-webhook.sh --check
 ```
 
 ## 8. 운영 스모크 테스트
+### 8.0 자동 실행
+
+```bash
+./scripts/ops/smoke-test.sh
+```
+
 ### 8.1 Health Check
 
 ```bash
@@ -172,3 +171,8 @@ curl -i "https://your-domain.example.com/auth/google/start?connect_token=invalid
 - `docker-compose.prod.yml`: EC2 운영 배포
 - `nginx/docker-compose.conf`: 로컬 HTTP 프록시
 - `nginx/nginx.conf`: 운영 HTTPS 프록시
+- `scripts/ops/certbot-renew.sh`: nginx stop/start를 포함한 Certbot renew 래퍼
+- `scripts/ops/install-certbot-timer.sh`: systemd service/timer 설치 스크립트
+- `scripts/ops/telegram-webhook.sh`: Telegram webhook 등록/검증 스크립트
+- `scripts/ops/smoke-test.sh`: healthz/webhook/OAuth 스모크 테스트 스크립트
+- `deploy/systemd/`: Certbot renew systemd 템플릿

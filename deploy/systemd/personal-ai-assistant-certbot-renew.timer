@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule Let's Encrypt renewal for Personal AI Assistant
+
+[Timer]
+OnCalendar=*-*-* 04,16:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=personal-ai-assistant-certbot-renew.service
+
+[Install]
+WantedBy=timers.target
