@@ -174,6 +174,30 @@ class GoogleOAuthService:
         session.flush()
         return record
 
+    def validate_connect_token(self, session: Session, connect_token: str) -> OAuthConnectToken:
+        try:
+            payload = self.connect_token_signer.loads(connect_token)
+        except SignedTokenError as exc:
+            raise InvalidConnectToken("Connect token is invalid.") from exc
+
+        record = session.get(OAuthConnectToken, connect_token)
+        if record is None:
+            raise InvalidConnectToken("Connect token is invalid.")
+
+        record_expires_at = ensure_aware(record.expires_at).astimezone(dt_timezone.utc).replace(microsecond=0)
+        if payload.get("user_id") != record.user_id:
+            raise InvalidConnectToken("Connect token is invalid.")
+        if payload.get("platform") != record.platform:
+            raise InvalidConnectToken("Connect token is invalid.")
+        if payload.get("exp") != record_expires_at.isoformat():
+            raise InvalidConnectToken("Connect token is invalid.")
+        if record.used_at is not None:
+            raise InvalidConnectToken("Connect token is already used.")
+        if record_expires_at < utcnow():
+            raise InvalidConnectToken("Connect token is expired.")
+
+        return record
+
     def _ensure_valid_access_token(self, session: Session, user_id: str) -> str:
         account = session.scalar(
             select(OAuthAccount).where(
@@ -218,6 +242,7 @@ class GoogleOAuthService:
         end_local: str,
         calendar_id: str = "primary",
     ) -> dict:
+        calendar_id = calendar_id or "primary"
         token = self._ensure_valid_access_token(session, user_id)
         params = {
             "timeMin": parse_local_datetime(start_local, timezone).astimezone(dt_timezone.utc).isoformat(),
@@ -260,6 +285,7 @@ class GoogleOAuthService:
         location: Optional[str] = None,
         calendar_id: str = "primary",
     ) -> dict:
+        calendar_id = calendar_id or "primary"
         token = self._ensure_valid_access_token(session, user_id)
         payload = {
             "summary": title,
@@ -299,6 +325,7 @@ class GoogleOAuthService:
         location: Optional[str] = None,
         calendar_id: str = "primary",
     ) -> dict:
+        calendar_id = calendar_id or "primary"
         token = self._ensure_valid_access_token(session, user_id)
         patch: dict[str, object] = {}
         if title is not None:

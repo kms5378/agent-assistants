@@ -33,6 +33,20 @@ class ConversationService:
         if inbound is None:
             return []
 
+        direct_response = self._handle_direct_google_connect_request(user=user, event=event, inbound_id=inbound.id)
+        if direct_response is not None:
+            self._store_assistant_message(user.id, event, direct_response)
+            self._refresh_summary(user.id, event.platform, event.conversation_id)
+            self.session.commit()
+            return [
+                OutboundMessage(
+                    platform=event.platform,
+                    chat_id=event.chat_id,
+                    text=direct_response,
+                    reply_to_message_id=event.message_id,
+                )
+            ]
+
         messages = self._build_prompt_messages(user_id=user.id, platform=event.platform, conversation_id=event.conversation_id)
         tools = self.tool_router.tool_definitions()
         response = self.model_client.create_turn(messages=messages, tools=tools)
@@ -157,6 +171,28 @@ class ConversationService:
             )
         )
         self.session.flush()
+
+    def _handle_direct_google_connect_request(self, *, user: InternalUser, event: InboundEvent, inbound_id: int) -> Optional[str]:
+        normalized = (event.text or "").strip().lower().replace(" ", "")
+        connect_keywords = ("연결", "연동", "재연결", "connect", "reconnect")
+        google_calendar_markers = ("구글캘린더", "googlecalendar")
+        if not any(marker in normalized for marker in google_calendar_markers):
+            return None
+        if not any(keyword in normalized for keyword in connect_keywords):
+            return None
+
+        result = self.tool_router.execute(
+            name="calendar_connect",
+            arguments={},
+            user=user,
+            event=event,
+            message_id=inbound_id,
+        )
+        self._store_tool_message(user.id, event, "calendar_connect", result)
+        connect_url = result.get("connect_url")
+        if not connect_url:
+            return None
+        return f"구글 캘린더를 연결하려면 아래 링크를 열어 주세요.\n{connect_url}"
 
     def _build_prompt_messages(self, *, user_id: str, platform: str, conversation_id: str) -> list[dict]:
         items = [{"role": "system", "content": self.persona_profile.build_system_prompt(platform=platform)}]

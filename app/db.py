@@ -35,6 +35,7 @@ def init_db(session_factory: sessionmaker[Session]) -> None:
     engine = session_factory.kw["bind"]
     Base.metadata.create_all(bind=engine)
     _apply_phase3_retry_columns(engine)
+    _apply_phase6_oauth_state_connect_token(engine)
     session = session_factory()
     try:
         baseline = session.get(SchemaMigration, SCHEMA_BASELINE_VERSION)
@@ -88,6 +89,16 @@ def _apply_phase3_retry_columns(engine) -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+def _apply_phase6_oauth_state_connect_token(engine) -> None:
+    inspector = inspect(engine)
+    oauth_state_columns = {column["name"] for column in inspector.get_columns("oauth_states")}
+    if "connect_token" in oauth_state_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE oauth_states ADD COLUMN connect_token VARCHAR(512)"))
 
 
 def _missing_column_statements(

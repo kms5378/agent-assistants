@@ -18,6 +18,7 @@ REQUIRED_PERSONA_FIELDS = (
 
 OPERATING_RULES = (
     "Use reminder and calendar tools when they are needed.",
+    "If the user asks to connect or reconnect Google Calendar, call the calendar_connect tool and include the returned link.",
     "If a reminder time is incomplete or ambiguous, ask a follow-up question instead of calling a tool.",
     "When deleting reminders, do not assume which reminder to delete if there are multiple matches.",
     "If Google Calendar is not connected, explain that the user needs to connect Google and include the provided link.",

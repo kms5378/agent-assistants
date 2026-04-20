@@ -87,6 +87,7 @@ class OAuthState(Base):
     state: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    connect_token: Mapped[Optional[str]] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

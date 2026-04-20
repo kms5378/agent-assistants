@@ -6,11 +6,12 @@ from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import httpx
 from sqlalchemy import select
 
 from app.api.main import AppContainer, create_app
 from app.channels.telegram import TelegramAdapter
-from app.contracts import InboundEvent, ModelToolCall, ModelTurnResponse
+from app.contracts import InboundEvent, InternalUser, ModelToolCall, ModelTurnResponse
 from app.core.security import TokenCipher
 from app.core.settings import Settings
 from app.core.time import ensure_aware, utcnow
@@ -45,6 +46,14 @@ class FakeModel:
         self.tool_outputs = tool_outputs
         assert self.follow_up is not None
         return self.follow_up
+
+
+class FailIfCalledModel:
+    def create_turn(self, *, messages, tools):
+        raise AssertionError("model should not be called")
+
+    def submit_tool_outputs(self, *, previous_response_id, tool_outputs, tools):
+        raise AssertionError("model should not be called")
 
 
 class RecordingTelegramAdapter(TelegramAdapter):
@@ -243,6 +252,62 @@ def test_conversation_service_creates_reminder_via_tool_call(tmp_path):
     assert "status" in model.tool_outputs[0]["output"]
 
 
+def test_conversation_service_passes_google_connect_link_from_tool_output(tmp_path):
+    model = FakeModel(
+        initial=ModelTurnResponse(
+            response_id="resp-1",
+            text="",
+            tool_calls=[
+                ModelToolCall(
+                    call_id="call-1",
+                    name="calendar_connect",
+                    arguments={},
+                )
+            ],
+        ),
+        follow_up=ModelTurnResponse(response_id="resp-2", text="구글 캘린더 연결 링크를 보냈어요."),
+    )
+    container = make_container(tmp_path, model_client=model)
+    session = container.session_factory()
+    service = container.build_conversation_service(session)
+
+    outbound = service.handle_event(
+        InboundEvent(
+            platform="telegram",
+            external_user_id="tg-user",
+            chat_id="chat-1",
+            conversation_id="chat-1",
+            message_id="msg-1",
+            update_id="update-1",
+            text="링크 보내줘",
+        )
+    )
+
+    assert outbound[0].text == "구글 캘린더 연결 링크를 보냈어요."
+    assert '"provider": "google"' in model.tool_outputs[0]["output"]
+    assert '"connect_url": "https://assistant.example.com/auth/google/start?connect_token=' in model.tool_outputs[0]["output"]
+
+
+def test_conversation_service_shortcuts_google_connect_requests(tmp_path):
+    container = make_container(tmp_path, model_client=FailIfCalledModel())
+    session = container.session_factory()
+    service = container.build_conversation_service(session)
+
+    outbound = service.handle_event(
+        InboundEvent(
+            platform="telegram",
+            external_user_id="tg-user",
+            chat_id="chat-1",
+            conversation_id="chat-1",
+            message_id="msg-1",
+            update_id="update-1",
+            text="구글캘린더 연결해줘",
+        )
+    )
+
+    assert outbound[0].text.startswith("구글 캘린더를 연결하려면 아래 링크를 열어 주세요.\nhttps://assistant.example.com/auth/google/start?connect_token=")
+
+
 def test_webhook_is_idempotent(tmp_path):
     container = make_container(tmp_path)
     app = create_app(container)
@@ -330,10 +395,11 @@ def test_google_oauth_start_consumes_signed_one_time_connect_token(tmp_path):
         token_record = session.get(OAuthConnectToken, token)
         oauth_state = session.scalar(select(OAuthState).where(OAuthState.state == redirect_query["state"][0]))
         assert token_record is not None
-        assert token_record.used_at is not None
+        assert token_record.used_at is None
         assert oauth_state is not None
         assert oauth_state.user_id == user_id
         assert oauth_state.platform == "telegram"
+        assert oauth_state.connect_token == token
     finally:
         session.close()
 
@@ -356,7 +422,7 @@ def test_google_oauth_start_rejects_reused_connect_token(tmp_path):
     second = client.get("/auth/google/start", params={"connect_token": token}, follow_redirects=False)
 
     assert first.status_code == 307
-    assert second.status_code == 400
+    assert second.status_code == 307
 
 
 def test_google_oauth_start_rejects_expired_connect_token(tmp_path):
@@ -447,10 +513,13 @@ def test_google_oauth_callback_saves_tokens_after_valid_start(tmp_path):
             )
         )
         state_record = session.scalar(select(OAuthState).where(OAuthState.state == state))
+        token_record = session.get(OAuthConnectToken, token)
         assert account is not None
         assert account.email == "tester@example.com"
         assert account.refresh_token_encrypted is not None
         assert state_record is None
+        assert token_record is not None
+        assert token_record.used_at is not None
     finally:
         session.close()
 
@@ -545,6 +614,145 @@ def test_tool_definitions_use_strict_compatible_required_fields(tmp_path):
 
     recurrence = tools[0]["parameters"]["properties"]["recurrence"]
     assert set(recurrence["required"]) == set(recurrence["properties"].keys())
+
+
+def test_tool_router_issues_google_connect_url_for_calendar_connect(tmp_path):
+    container = make_container(tmp_path)
+    session = container.session_factory()
+    try:
+        reminder_service = ReminderService(session, container.settings.default_timezone)
+        router = ToolRouter(reminder_service=reminder_service, google_service=container.google_service)
+        result = router.execute(
+            name="calendar_connect",
+            arguments={},
+            user=InternalUser(
+                id="user-1",
+                timezone="Asia/Seoul",
+                platform="telegram",
+                platform_user_id="tg-user",
+            ),
+            event=InboundEvent(
+                platform="telegram",
+                external_user_id="tg-user",
+                chat_id="chat-1",
+                conversation_id="chat-1",
+                message_id="msg-1",
+                update_id="update-1",
+                text="구글 캘린더 연결해줘",
+            ),
+            message_id=None,
+        )
+
+        assert result["status"] == "ok"
+        assert result["provider"] == "google"
+        assert result["connect_url"].startswith("https://assistant.example.com/auth/google/start?connect_token=")
+        token = extract_connect_token(result["connect_url"])
+        record = session.get(OAuthConnectToken, token)
+        assert record is not None
+        assert record.user_id == "user-1"
+        assert record.platform == "telegram"
+    finally:
+        session.close()
+
+
+def test_tool_router_defaults_null_calendar_id_to_primary(tmp_path):
+    container = make_container(tmp_path)
+    session = container.session_factory()
+    captured: dict[str, object] = {}
+
+    def fake_list_events(db_session, *, user_id, timezone, start_local, end_local, calendar_id):
+        captured["session"] = db_session
+        captured["user_id"] = user_id
+        captured["timezone"] = timezone
+        captured["start_local"] = start_local
+        captured["end_local"] = end_local
+        captured["calendar_id"] = calendar_id
+        return {"status": "ok", "items": []}
+
+    container.google_service.list_events = fake_list_events
+    try:
+        reminder_service = ReminderService(session, container.settings.default_timezone)
+        router = ToolRouter(reminder_service=reminder_service, google_service=container.google_service)
+        result = router.execute(
+            name="calendar_list_events",
+            arguments={
+                "start_local": "2026-04-20T09:00:00+09:00",
+                "end_local": "2026-04-20T10:00:00+09:00",
+                "timezone": "Asia/Seoul",
+                "calendar_id": None,
+            },
+            user=InternalUser(
+                id="user-1",
+                timezone="Asia/Seoul",
+                platform="telegram",
+                platform_user_id="tg-user",
+            ),
+            event=InboundEvent(
+                platform="telegram",
+                external_user_id="tg-user",
+                chat_id="chat-1",
+                conversation_id="chat-1",
+                message_id="msg-1",
+                update_id="update-1",
+                text="오늘 일정 보여줘",
+            ),
+            message_id=None,
+        )
+
+        assert result == {"status": "ok", "items": []}
+        assert captured["calendar_id"] == "primary"
+    finally:
+        session.close()
+
+
+def test_tool_router_returns_structured_google_http_error(tmp_path):
+    container = make_container(tmp_path)
+    session = container.session_factory()
+    request = httpx.Request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events")
+    response = httpx.Response(404, request=request, text='{"error":"notFound"}')
+
+    def fake_list_events(*args, **kwargs):
+        raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+    container.google_service.list_events = fake_list_events
+    try:
+        reminder_service = ReminderService(session, container.settings.default_timezone)
+        router = ToolRouter(reminder_service=reminder_service, google_service=container.google_service)
+        result = router.execute(
+            name="calendar_list_events",
+            arguments={
+                "start_local": "2026-04-20T09:00:00+09:00",
+                "end_local": "2026-04-20T10:00:00+09:00",
+                "timezone": "Asia/Seoul",
+                "calendar_id": None,
+            },
+            user=InternalUser(
+                id="user-1",
+                timezone="Asia/Seoul",
+                platform="telegram",
+                platform_user_id="tg-user",
+            ),
+            event=InboundEvent(
+                platform="telegram",
+                external_user_id="tg-user",
+                chat_id="chat-1",
+                conversation_id="chat-1",
+                message_id="msg-1",
+                update_id="update-1",
+                text="오늘 일정 보여줘",
+            ),
+            message_id=None,
+        )
+
+        assert result == {
+            "status": "error",
+            "message": "Google Calendar request failed.",
+            "error_type": "HTTPStatusError",
+            "upstream_status": 404,
+            "upstream_body": '{"error":"notFound"}',
+        }
+    finally:
+        session.close()
 
 
 def test_worker_sends_due_reminder_once_and_reschedules_recurring(tmp_path):

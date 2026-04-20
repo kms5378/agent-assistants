@@ -213,7 +213,21 @@
 - 목적: upcoming reminder 목록 조회
 - Request Fields: 없음
 
-### 4.5 `calendar_list_events`
+### 4.5 `calendar_connect`
+- 목적: Google Calendar 연결 또는 재연결 링크를 발급
+- Request Fields: 없음
+
+#### Success Result
+
+```json
+{
+  "status": "ok",
+  "provider": "google",
+  "connect_url": "https://assistant.example.com/auth/google/start?connect_token=..."
+}
+```
+
+### 4.6 `calendar_list_events`
 - Required Fields:
   - `start_local: string`
   - `end_local: string`
@@ -237,7 +251,7 @@
 }
 ```
 
-### 4.6 `calendar_create_event`
+### 4.7 `calendar_create_event`
 - Required Fields:
   - `title`
   - `start_local`
@@ -248,7 +262,7 @@
   - `location`
   - `calendar_id`
 
-### 4.7 `calendar_update_event`
+### 4.8 `calendar_update_event`
 - Required Fields:
   - `event_id`
   - `timezone`
@@ -260,7 +274,7 @@
   - `location`
   - `calendar_id`
 
-### 4.8 OAuth Required Result
+### 4.9 OAuth Required Result
 - calendar tool 공통 오류 포맷
 
 ```json

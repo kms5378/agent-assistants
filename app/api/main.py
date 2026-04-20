@@ -169,7 +169,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
         session = resolved_container.session_factory()
         try:
             try:
-                connect_record = resolved_container.google_service.consume_connect_token(session, connect_token)
+                connect_record = resolved_container.google_service.validate_connect_token(session, connect_token)
             except InvalidConnectToken as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -181,6 +181,7 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
                     state=state,
                     user_id=connect_record.user_id,
                     platform=connect_record.platform,
+                    connect_token=connect_token,
                     expires_at=utcnow() + timedelta(minutes=10),
                 )
             )
@@ -197,10 +198,19 @@ def create_app(container: Optional[AppContainer] = None) -> FastAPI:
             record = session.scalar(select(OAuthState).where(OAuthState.state == state))
             if record is None or ensure_aware(record.expires_at) < utcnow():
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth state is invalid or expired.")
+            if not record.connect_token:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth connect token is missing.")
             try:
                 bundle = resolved_container.google_service.exchange_code(code)
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google token exchange failed.") from exc
+            try:
+                resolved_container.google_service.consume_connect_token(session, record.connect_token)
+            except InvalidConnectToken as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Connect token is invalid, expired, or already used.",
+                ) from exc
             resolved_container.google_service.save_tokens(session, user_id=record.user_id, bundle=bundle)
             session.delete(record)
             session.commit()

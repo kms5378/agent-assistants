@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import httpx
+
 from app.contracts import InboundEvent, InternalUser
 from app.services.google_calendar import GoogleOAuthService, OAuthConnectionRequired
 from app.services.reminders import ReminderService
@@ -12,6 +14,13 @@ from app.services.reminders import ReminderService
 class ToolRouter:
     reminder_service: ReminderService
     google_service: GoogleOAuthService
+
+    @staticmethod
+    def _resolve_calendar_id(arguments: dict[str, Any]) -> str:
+        calendar_id = arguments.get("calendar_id")
+        if isinstance(calendar_id, str) and calendar_id.strip():
+            return calendar_id
+        return "primary"
 
     def tool_definitions(self) -> list[dict[str, Any]]:
         return [
@@ -79,6 +88,17 @@ class ToolRouter:
                 "type": "function",
                 "name": "reminder_list",
                 "description": "List upcoming reminders for the user.",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "type": "function",
+                "name": "calendar_connect",
+                "description": "Generate a Google Calendar connection link when the user asks to connect or reconnect Google Calendar.",
                 "strict": True,
                 "parameters": {
                     "type": "object",
@@ -178,6 +198,16 @@ class ToolRouter:
             )
         if name == "reminder_list":
             return self.reminder_service.list_reminders(user_id=user.id)
+        if name == "calendar_connect":
+            return {
+                "status": "ok",
+                "provider": "google",
+                "connect_url": self.google_service.issue_connect_url(
+                    self.reminder_service.session,
+                    user_id=user.id,
+                    platform=user.platform,
+                ),
+            }
 
         try:
             if name == "calendar_list_events":
@@ -187,7 +217,7 @@ class ToolRouter:
                     timezone=arguments.get("timezone") or user.timezone,
                     start_local=arguments["start_local"],
                     end_local=arguments["end_local"],
-                    calendar_id=arguments.get("calendar_id", "primary"),
+                    calendar_id=self._resolve_calendar_id(arguments),
                 )
             if name == "calendar_create_event":
                 return self.google_service.create_event(
@@ -199,7 +229,7 @@ class ToolRouter:
                     end_local=arguments["end_local"],
                     description=arguments.get("description"),
                     location=arguments.get("location"),
-                    calendar_id=arguments.get("calendar_id", "primary"),
+                    calendar_id=self._resolve_calendar_id(arguments),
                 )
             if name == "calendar_update_event":
                 return self.google_service.update_event(
@@ -212,7 +242,7 @@ class ToolRouter:
                     end_local=arguments.get("end_local"),
                     description=arguments.get("description"),
                     location=arguments.get("location"),
-                    calendar_id=arguments.get("calendar_id", "primary"),
+                    calendar_id=self._resolve_calendar_id(arguments),
                 )
         except OAuthConnectionRequired as exc:
             return {
@@ -223,6 +253,20 @@ class ToolRouter:
                     user_id=user.id,
                     platform=user.platform,
                 ),
+            }
+        except httpx.HTTPStatusError as exc:
+            return {
+                "status": "error",
+                "message": "Google Calendar request failed.",
+                "error_type": type(exc).__name__,
+                "upstream_status": exc.response.status_code,
+                "upstream_body": exc.response.text,
+            }
+        except httpx.HTTPError as exc:
+            return {
+                "status": "error",
+                "message": "Google Calendar request failed.",
+                "error_type": type(exc).__name__,
             }
 
         return {"status": "error", "message": f"Unknown tool: {name}"}
