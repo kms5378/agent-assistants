@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.contracts import InboundEvent, InternalUser, OutboundMessage
 from app.core.settings import Settings
 from app.models import ChannelAccount, ConversationSummary, Message, User
-from app.services.openai_responses import ConversationModel
+from app.services.nvidia_chat_completions import ConversationModel
 from app.services.tool_router import ToolRouter
 
 
@@ -41,32 +41,38 @@ class ConversationService:
         messages = self._build_prompt_messages(user_id=user.id, platform=event.platform, conversation_id=event.conversation_id)
         tools = self.tool_router.tool_definitions()
         response = self.model_client.create_turn(messages=messages, tools=tools)
-
-        while response.tool_calls:
-            tool_outputs: list[dict[str, str]] = []
-            for tool_call in response.tool_calls:
-                result = self.tool_router.execute(
-                    name=tool_call.name,
-                    arguments=tool_call.arguments,
-                    user=user,
-                    event=event,
-                    message_id=inbound.id,
+        pending_response_id: Optional[str] = None
+        try:
+            while response.tool_calls:
+                pending_response_id = response.response_id
+                tool_outputs: list[dict[str, str]] = []
+                for tool_call in response.tool_calls:
+                    result = self.tool_router.execute(
+                        name=tool_call.name,
+                        arguments=tool_call.arguments,
+                        user=user,
+                        event=event,
+                        message_id=inbound.id,
+                    )
+                    self._store_tool_message(user.id, event, tool_call.name, result)
+                    tool_outputs.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": tool_call.call_id,
+                            "output": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+                if not response.response_id:
+                    break
+                response = self.model_client.submit_tool_outputs(
+                    previous_response_id=response.response_id,
+                    tool_outputs=tool_outputs,
+                    tools=tools,
                 )
-                self._store_tool_message(user.id, event, tool_call.name, result)
-                tool_outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": tool_call.call_id,
-                        "output": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-            if not response.response_id:
-                break
-            response = self.model_client.submit_tool_outputs(
-                previous_response_id=response.response_id,
-                tool_outputs=tool_outputs,
-                tools=tools,
-            )
+                pending_response_id = None
+        finally:
+            if pending_response_id:
+                self.model_client.discard_response(response_id=pending_response_id)
 
         final_text = response.text.strip() or "도와드릴 준비가 되었어요."
         self._store_assistant_message(user.id, event, final_text)
@@ -173,12 +179,7 @@ class ConversationService:
             )
         )
         if summary:
-            items.append(
-                {
-                    "role": "developer",
-                    "content": f"Conversation summary:\n{summary.summary_text}",
-                }
-            )
+            items[0]["content"] += f"\n\nConversation summary:\n{summary.summary_text}"
 
         recent_messages = list(
             self.session.scalars(

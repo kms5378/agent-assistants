@@ -8,7 +8,7 @@
 ## 2. 현재 상태 요약
 - FastAPI app skeleton 존재
 - Telegram webhook endpoint 존재
-- OpenAI Responses function-calling loop 존재
+- NVIDIA NIM Chat Completions function-calling loop 존재
 - reminder CRUD 및 polling worker 존재
 - Google OAuth / Calendar 기본 경계 존재
 - pytest 기반 기본 테스트 존재
@@ -110,8 +110,8 @@
 ## 7. 환경 변수 기준
 - `APP_BASE_URL`
 - `DATABASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
+- `NVIDIA_API_KEY`
+- `NVIDIA_MODEL`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `TELEGRAM_WEBHOOK_KEY`
@@ -129,7 +129,7 @@
 - ingress: Telegram webhook only
 - infra: single EC2 + nginx + postgres + worker
 - HTTPS: `nginx + Let's Encrypt/Certbot`
-- model API: `OpenAI Responses API`
+- model API: `NVIDIA NIM Chat Completions API`
 - state: DB source of truth
 - TTS: last phase, provider-agnostic, global single profile
 - retry policy: 3 minutes, 3 attempts, then failed

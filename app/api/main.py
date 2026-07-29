@@ -18,7 +18,7 @@ from app.db import build_session_factory, init_db
 from app.models import OAuthState, User
 from app.services.conversation import ConversationService
 from app.services.google_calendar import GoogleOAuthService
-from app.services.openai_responses import OpenAIResponsesClient
+from app.services.nvidia_chat_completions import NvidiaChatCompletionsClient
 from app.services.reminders import ReminderService
 from app.services.tool_router import ToolRouter
 
@@ -39,9 +39,9 @@ class AppContainer:
         return cls(
             settings=resolved,
             session_factory=session_factory,
-            model_client=OpenAIResponsesClient(
-                api_key=resolved.openai_api_key,
-                model=resolved.openai_model,
+            model_client=NvidiaChatCompletionsClient(
+                api_key=resolved.nvidia_api_key,
+                model=resolved.nvidia_model,
             ),
             telegram_adapter=TelegramAdapter(
                 bot_token=resolved.telegram_bot_token or "",

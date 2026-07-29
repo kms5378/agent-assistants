@@ -11,7 +11,7 @@ flowchart LR
     E --> F["Load/Create InternalUser"]
     F --> G["Store inbound message + idempotency check"]
     G --> H["Build prompt: system + summary + recent turns"]
-    H --> I["OpenAI Responses API"]
+    H --> I["NVIDIA NIM Chat Completions API"]
     I --> J{"Tool call exists?"}
     J -- "No" --> K["Store assistant message"]
     J -- "Yes" --> L["ToolRouter.execute"]
