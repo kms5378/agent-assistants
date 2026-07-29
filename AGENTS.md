@@ -47,7 +47,7 @@
   - 내부 사용자 식별 또는 생성
   - inbound message 저장 및 idempotency 검사
   - 최근 대화와 summary 조합
-  - Responses API 호출
+  - NVIDIA NIM Chat Completions API 호출
   - tool call이 있으면 Tool Router로 위임
   - tool output을 다시 모델에 전달
   - final assistant message 저장 후 반환

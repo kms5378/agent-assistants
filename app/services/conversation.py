@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.contracts import InboundEvent, InternalUser, OutboundMessage
 from app.core.settings import Settings
 from app.models import ChannelAccount, ConversationSummary, Message, User
-from app.services.openai_responses import ConversationModel
+from app.services.nvidia_chat_completions import ConversationModel
 from app.services.tool_router import ToolRouter
 
 

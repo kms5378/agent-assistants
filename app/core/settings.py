@@ -32,8 +32,10 @@ class Settings:
     app_base_url: str = _env("APP_BASE_URL", "https://example.com") or "https://example.com"
     environment: str = _env("APP_ENV", "development") or "development"
     database_url: str = _env("DATABASE_URL", "sqlite:///./assistant.db") or "sqlite:///./assistant.db"
-    openai_api_key: Optional[str] = _env("OPENAI_API_KEY")
-    openai_model: str = _env("OPENAI_MODEL", "gpt-5.4-mini") or "gpt-5.4-mini"
+    nvidia_api_key: Optional[str] = _env("NVIDIA_API_KEY")
+    nvidia_model: str = _env(
+        "NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"
+    ) or "nvidia/nemotron-3-ultra-550b-a55b"
     telegram_bot_token: Optional[str] = _env("TELEGRAM_BOT_TOKEN")
     telegram_webhook_secret: str = _env("TELEGRAM_WEBHOOK_SECRET", "change-me") or "change-me"
     telegram_webhook_key: str = _env("TELEGRAM_WEBHOOK_KEY", "telegram-webhook-key") or "telegram-webhook-key"

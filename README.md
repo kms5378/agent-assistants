@@ -3,7 +3,7 @@
 FastAPI 기반의 대화형 Telegram assistant 입니다. 현재 구현 범위는 다음과 같습니다.
 
 - Telegram webhook 수신 및 자연어 대화 응답
-- OpenAI Responses API 기반 function calling 루프
+- NVIDIA NIM Chat Completions 기반 function calling 루프
 - 자연어 기반 reminder 생성/조회/삭제/알림
 - Google Calendar OAuth 연결 및 조회/생성/수정 REST 경계
 - 단일 worker polling 기반 reminder 발송
@@ -30,6 +30,19 @@ uvicorn app.api.main:app --reload
 ```bash
 python -m app.worker
 ```
+
+## NVIDIA NIM 설정
+
+`.env`에 다음 값을 설정합니다.
+
+```dotenv
+NVIDIA_API_KEY=your-nvidia-api-key
+NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b-a55b
+```
+
+- API endpoint: `https://integrate.api.nvidia.com/v1`
+- 모델: [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b)
+- NVIDIA 무료 Endpoint는 개발·평가용이며 운영 Telegram 트래픽에 사용하지 않는다.
 
 ## Docker Compose
 

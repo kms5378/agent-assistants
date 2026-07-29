@@ -336,41 +336,22 @@ git commit -m "feat: make NVIDIA the assistant model provider"
 
 **Files:**
 - Modify: `README.md`
-- Test: `tests/test_app.py`
 
 **Interfaces:**
 - Consumes: `NVIDIA_API_KEY`, optional `NVIDIA_MODEL`, and the NVIDIA endpoint.
 - Produces: documentation without OpenAI runtime or configuration instructions.
 
-- [ ] **Step 1: Write the failing documentation test**
-
-```python
-def test_readme_documents_nvidia_setup_only():
-    readme = Path("README.md").read_text(encoding="utf-8")
-
-    assert "NVIDIA_API_KEY" in readme
-    assert "nvidia/nemotron-3-ultra-550b-a55b" in readme
-    assert "https://integrate.api.nvidia.com/v1" in readme
-    assert "OPENAI_API_KEY" not in readme
-```
-
-- [ ] **Step 2: Run the test and confirm it is red**
-
-Run: `.venv/bin/pytest tests/test_app.py::test_readme_documents_nvidia_setup_only -v`
-
-Expected: FAIL because the README describes the OpenAI Responses API.
-
-- [ ] **Step 3: Replace the setup instructions**
+- [ ] **Step 1: Replace the setup instructions**
 
 Document NVIDIA NIM Chat Completions, the selected model, `NVIDIA_API_KEY`, optional `NVIDIA_MODEL`, endpoint `https://integrate.api.nvidia.com/v1`, and [the NVIDIA model page](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b). Add this Korean warning exactly: `NVIDIA 무료 Endpoint는 개발·평가용이며 운영 Telegram 트래픽에 사용하지 않는다.`
 
-- [ ] **Step 4: Run the documentation and full suite**
+- [ ] **Step 2: Run the full suite**
 
-Run: `.venv/bin/pytest tests/test_app.py::test_readme_documents_nvidia_setup_only -v && .venv/bin/pytest -q`
+Run: `.venv/bin/pytest -q`
 
-Expected: the documentation test PASS and all tests PASS.
+Expected: all tests PASS.
 
-- [ ] **Step 5: Verify removal and commit**
+- [ ] **Step 3: Verify removal and commit**
 
 Run: `git diff --check && rg -n "OPENAI_API_KEY|OPENAI_MODEL|Responses API" README.md app tests`
 
