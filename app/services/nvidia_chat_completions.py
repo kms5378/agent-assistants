@@ -20,6 +20,9 @@ class ConversationModel(Protocol):
     ) -> ModelTurnResponse:
         ...
 
+    def discard_response(self, *, response_id: str) -> None:
+        ...
+
 
 class NvidiaChatCompletionsClient:
     def __init__(self, *, api_key: Optional[str], model: str) -> None:
@@ -41,11 +44,7 @@ class NvidiaChatCompletionsClient:
         return self._client
 
     def create_turn(self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ModelTurnResponse:
-        response = self._get_client().chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=_to_chat_tools(tools),
-        )
+        response = self._create_completion(messages=messages, tools=tools)
         return self._normalize_response(response, messages)
 
     def submit_tool_outputs(
@@ -69,12 +68,30 @@ class NvidiaChatCompletionsClient:
                 for item in tool_outputs
             ],
         ]
-        response = self._get_client().chat.completions.create(
-            model=self.model,
+        response = self._create_completion(
             messages=messages,
-            tools=_to_chat_tools(tools),
+            tools=tools,
         )
         return self._normalize_response(response, messages)
+
+    def discard_response(self, *, response_id: str) -> None:
+        self._pending_messages.pop(response_id, None)
+
+    def _create_completion(self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Any:
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "tools": _to_chat_tools(tools),
+            "stream": False,
+        }
+        if tools:
+            request["extra_body"] = {
+                "chat_template_kwargs": {
+                    "enable_thinking": True,
+                    "force_nonempty_content": True,
+                }
+            }
+        return self._get_client().chat.completions.create(**request)
 
     def _normalize_response(self, response: Any, messages: list[dict[str, Any]]) -> ModelTurnResponse:
         message = _lookup(_lookup(response, "choices", default=[])[0], "message")

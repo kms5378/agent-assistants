@@ -37,6 +37,7 @@ python -m app.worker
 
 ```dotenv
 NVIDIA_API_KEY=your-nvidia-api-key
+# Optional: omitted values use nvidia/nemotron-3-ultra-550b-a55b.
 NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 ```
 

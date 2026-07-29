@@ -23,8 +23,8 @@ NVIDIA client and is never logged.
 
 ## Architecture
 
-Keep `ConversationModel` unchanged so `ConversationService` and its tool loop
-remain stable. Replace `OpenAIResponsesClient` with
+Keep the existing `ConversationModel` turn methods and `ConversationService`
+tool loop. Add a `discard_response` cleanup method to the protocol. Replace `OpenAIResponsesClient` with
 `NvidiaChatCompletionsClient`; `AppContainer.build` always constructs the
 NVIDIA client.
 
@@ -36,13 +36,20 @@ Responses API tool definitions into Chat Completions function definitions:
 {"type":"function","function":{"name":"...","description":"...","parameters":{}}}
 ```
 
+It explicitly requests non-streaming responses and sets
+`enable_thinking` plus `force_nonempty_content` for tool-enabled calls. To
+meet the selected model's message-role contract, conversation summaries are
+appended to the initial system message instead of emitted as `developer`
+messages.
+
 For a tool call, the client records the original chat messages and the
 assistant's tool-call message under a generated, request-local response ID.
 When `ConversationService` submits tool output, the client reconstructs the
 NVIDIA message sequence with `role: tool`, the original `tool_call_id`, and the
 JSON result. A follow-up that contains another tool call receives a new local
 response ID. State is removed after a terminal response so request-local chat
-state does not accumulate.
+state does not accumulate. If tool execution or its follow-up request fails,
+`ConversationService` discards the pending response state.
 
 ## Error Handling
 
